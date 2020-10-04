@@ -313,7 +313,21 @@ class SHCI(pyscf.lib.StreamObject):
                     val  = float(line.split()[2])
                 trdm1[orb1][orb2] = val
         return trdm1
-        
+    
+    def make_spin_rdm1(self, state, norb, nelec, link_index=None, **kwargs):
+        #reads the complex valued spin 1rdm.
+        filename = "spin1RDM.%d.%d.txt" % (state, state)
+        spin1rdm = numpy.zeros((norb*2, norb*2), dtype=complex)
+        with open(filename, 'r') as file_spin1rdm:
+            head = file_spin1rdm.readline()
+            assert(int(head) == norb*2)
+            for line in file_spin1rdm.readlines():
+                data_txt = line.split()
+                assert(len(data_txt) == 4)
+                i, j, re, im = int(data_txt[0]), int(data_txt[1]), float(data_txt[2]), float(data_txt[3])
+                spin1rdm[i, j] = 1. * re + 1.j * im
+        return spin1rdm
+
     def make_rdm1(self, state, norb, nelec, link_index=None, **kwargs):
         # Avoid calling self.make_rdm12 because it may be overloaded
         return self.make_rdm12(state, norb, nelec, link_index, **kwargs)[0]
