@@ -1,5 +1,5 @@
 import pyscf, h5py, numpy
-from pyscf import scf, gto, ao2mo, tools
+from pyscf import scf, gto, ao2mo, tools, lib
 from functools import reduce
 
 TOL=1e-16
@@ -67,20 +67,15 @@ def from_x2c(mf, ncore, nact, filename = 'FCIDUMP', tol=1e-8, intor='int2e_spino
     energy_core = mf.energy_nuc()
     energy_core += numpy.einsum('ij,ji', core_dm, hcore)
     energy_core += numpy.einsum('ij,ji', core_dm, corevhf) * .5
-    h1eff = reduce(numpy.dot, (mo_coeff.T.conjugate(), hcore+corevhf, mo_coeff))
-    #print(h1eff, energy_core)
-    #reduce(numpy.dot, (mf.mo_coeff.T, mf.get_hcore(), mf.mo_coeff))[ncore:ncore+nact, ncore:ncore+nact]
+    h1eff = reduce(numpy.dot, (mo_coeff.T.conj(), hcore+corevhf, mo_coeff))
     if mf._eri is None:
         eri = ao2mo.kernel(mf.mol, mo_coeff, intor=intor)
     else:
         eri = ao2mo.kernel(mf._eri, mo_coeff, intor=intor)
-    #core_occ = numpy.zeros(len(mf.mo_energy))
-    #core_occ[:ncore] = 1.0
-    #dm = mf.make_rdm1(mo_occ = core_occ)
-    #core_energy = scf.hf.energy_elec(mf, dm=dm)
-    print(mf.energy_nuc(), energy_core)
     from_integrals(filename = filename, h1e=h1eff, h2e=eri, nmo=nact, nelec=sum(mf.mol.nelec)-ncore, nuc=energy_core.real, tol=tol)
-    
+
+from pyscf.ao2mo import r_outcore
+
 def from_dhf(mf, ncore, nact, filename = 'FCIDUMP', tol=1e-10, intor='int2e_spinor'):
     ncore = ncore*2
     nact = nact*2
@@ -88,22 +83,31 @@ def from_dhf(mf, ncore, nact, filename = 'FCIDUMP', tol=1e-10, intor='int2e_spin
     n2c = n4c // 2
     nNeg = nmo // 2
     ncore += nNeg
-    mo_coeff = mf.mo_coeff[n2c:,ncore:ncore+nact]
-
+    mo_coeff = mf.mo_coeff[:,ncore:ncore+nact]
+    mol = mf.mol
     assert mo_coeff.dtype == numpy.complex
 
-    h1e = reduce(numpy.dot, (mf.mo_coeff.T, mf.get_hcore(), mf.mo_coeff))[ncore:ncore+nact, ncore:ncore+nact]
-    if mf._eri is None:
-        eri = ao2mo.kernel(mf.mol, mo_coeff, intor=intor)
-    else:
-        eri = ao2mo.kernel(mf._eri, mo_coeff, intor=intor)
-    core_occ = numpy.zeros(len(mf.mo_energy)//2)
-    core_occ[:ncore] = 1.0
-    dm = mf.make_rdm1(mo_occ = core_occ)
-    core_energy = scf.hf.energy_elec(mf, dm=dm)
+    core_occ = numpy.zeros(len(mf.mo_energy))
+    core_occ[n2c:ncore] = 1.0
+    core_dm = mf.make_rdm1(mo_occ = core_occ)
+    vj, vk = mf.get_jk(mol, core_dm)
+    vhf = vj - vk
+
+    hcore = mf.get_hcore()
+
+    h1e = reduce(numpy.dot, (mf.mo_coeff.T.conj(), hcore+vhf, mf.mo_coeff))
+    h1e = h1e[ncore:ncore+nact, ncore:ncore+nact]
+    
+    c1 = .5 / lib.param.LIGHT_SPEED
+    mo_ll = mf.mo_coeff[:n2c, ncore:ncore+nact]
+    mo_ss = c1 * mf.mo_coeff[n2c:, ncore:ncore+nact]
+    eri = ao2mo.kernel(mf.mol, [mo_ll, mo_ll, mo_ll, mo_ll], intor="int2e_spinor")
+    eri += ao2mo.kernel(mf.mol, [mo_ss, mo_ss, mo_ll, mo_ll], intor="int2e_spsp1_spinor")
+    eri += ao2mo.kernel(mf.mol, [mo_ll, mo_ll, mo_ss, mo_ss], intor="int2e_spsp2_spinor")
+    
+    core_energy = scf.hf.energy_elec(mf, dm=core_dm)[0]
     nuc = mf.energy_nuc() + core_energy
-    from_integrals(filename = filename, h1e=h1e, h2e=eri, nmo=nact, nelec=sum(mol.nelec)-ncore, nuc=nuc)
-    return
+    from_integrals(filename = filename, h1e = h1e, h2e = eri, nmo=nact, nelec=sum(mol.nelec)-ncore + n2c, nuc=nuc)
 
 if __name__ == '__main__':
     mol = gto.M( 
