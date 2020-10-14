@@ -335,3 +335,54 @@ class DF4C(DF):
         raise NotImplementedError
 
 GDF4C = DF4C
+
+class DF2C(DF):
+    '''Relativistic 2-component'''
+    def build(self):
+        log = logger.Logger(self.stdout, self.verbose)
+        mol = self.mol
+        auxmol = self.auxmol = addons.make_auxmol(self.mol, self.auxbasis)
+        n2c = mol.nao_2c()
+        naux = auxmol.nao_nr()
+        nao_pair = n2c*(n2c+1)//2
+
+        max_memory = (self.max_memory - lib.current_memory()[0]) * .8
+        if nao_pair*naux*3*16/1e6*2 < max_memory:
+            self._cderi =(r_incore.cholesky_eri(mol, auxmol=auxmol, aosym='s2',
+                                                int3c='int3c2e_spinor', verbose=log), None)
+        else:
+            raise NotImplementedError
+        return self
+
+    def loop(self, blksize=None):
+        if self._cderi is None:
+            self.build()
+        if blksize is None:
+            blksize = self.blockdim
+        with addons.load(self._cderi[0], 'j3c') as ferill:
+            naoaux = ferill.shape[0]
+            for b0, b1 in self.prange(0, naoaux, blksize):
+                erill = numpy.asarray(ferill[b0:b1], order='C')
+                yield erill
+
+    def get_jk(self, dm, hermi=1, with_j=True, with_k=True,
+               direct_scf_tol=getattr(__config__, 'scf_hf_SCF_direct_scf_tol', 1e-13),
+               omega=None):
+        if omega is None:
+            return df_jk.r2c_get_jk(self, dm, hermi, with_j, with_k)
+
+        # A temporary treatment for RSH-DF integrals
+        key = '%.6f' % omega
+        if key in self._rsh_df:
+            rsh_df = self._rsh_df[key]
+        else:
+            rsh_df = self._rsh_df[key] = copy.copy(self).reset()
+            logger.info(self, 'Create RSH-DF object %s for omega=%s', rsh_df, omega)
+
+        with rsh_df.mol.with_range_coulomb(omega):
+            return df_jk.r2c_get_jk(rsh_df, dm, hermi, with_j, with_k)
+
+    def ao2mo(self, mo_coeffs):
+        raise NotImplementedError
+
+GDF2C = DF2C

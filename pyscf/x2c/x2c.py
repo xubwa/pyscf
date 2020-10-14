@@ -146,7 +146,7 @@ class X2C(lib.StreamObject):
             contr_coeff[0::2,0::2] = contr_coeff_nr
             contr_coeff[1::2,1::2] = contr_coeff_nr
             h1 = reduce(numpy.dot, (contr_coeff.T.conj(), h1, contr_coeff))
-        hso1e = numpy.zeros((nc*2, nc*2), dtype=complex)
+        hso1e = numpy.zeros_like(h1, dtype=complex)
         if 'AMF' in self.approx.upper():
             # incorporate X2CAMF approximation.
             # since 1e SOC terms are already included.
@@ -425,7 +425,7 @@ class X2C_UHF(hf.SCF):
         nclose = mol.nelectron-nact
         assert(mol.nelectron==nclose+nact)
         mo_occ = numpy.zeros_like(mo_energy)
-        if nopen is 0:
+        if nopen == 0:
             mo_occ[:mol.nelectron] = 1
         else:
             mo_occ[:nclose]=1
@@ -811,12 +811,23 @@ if __name__ == '__main__':
                 [1   , (0. , 0.757  , 0.587)] ],
         basis = 'ccpvdz-dk',
     )
-
+    from pyscf import df, scf
     method = hf.RHF(mol)
     enr = method.kernel()
     print('E(NR) = %.12g' % enr)
 
     method = UHF(mol)
+    ex2c = method.kernel()
+    print('E(X2C1E) = %.12g' % ex2c)
+    method.with_x2c.basis = {'O': 'unc-ccpvqz', 'H':'unc-ccpvdz'}
+    print('E(X2C1E) = %.12g' % method.kernel())
+    method.with_x2c.approx = 'atom1e'
+    print('E(X2C1E) = %.12g' % method.kernel())
+
+    method = df.df_jk.density_fit(dhf.UHF(mol))
+    print(type(method.with_df))
+    print(isinstance(method, X2C_UHF))
+    exit()
     ex2c = method.kernel()
     print('E(X2C1E) = %.12g' % ex2c)
     method.with_x2c.basis = {'O': 'unc-ccpvqz', 'H':'unc-ccpvdz'}

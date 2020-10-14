@@ -64,12 +64,15 @@ def density_fit(mf, auxbasis=None, with_df=None, only_dfj=False):
     '''
     from pyscf import df
     from pyscf.scf import dhf
+    from pyscf.x2c import x2c
     from pyscf.soscf import newton_ah
     assert(isinstance(mf, scf.hf.SCF))
 
     if with_df is None:
         if isinstance(mf, dhf.UHF):
             with_df = df.DF4C(mf.mol)
+        elif isinstance(mf, x2c.X2C_UHF):
+            with_df = df.DF2C(mf.mol)
         else:
             with_df = df.DF(mf.mol)
         with_df.max_memory = mf.max_memory
@@ -491,6 +494,57 @@ def r_get_jk(dfobj, dms, hermi=1, with_j=True, with_k=True):
     logger.timer(dfobj, 'vj and vk', *t0)
     return vj, vk
 
+def r2c_get_jk(dfobj, dms, hermi=1, with_j=True, with_k=True):
+    '''Relativistic density fitting JK'''
+    t0 = (time.clock(), time.time())
+    mol = dfobj.mol
+    tao = mol.tmap()
+    ao_loc = mol.ao_loc_2c()
+    n2c = ao_loc[-1]
+
+    def fjk(dm):
+        dm = numpy.asarray(dm, dtype=numpy.complex128)
+        fmmm = libri.RIhalfmmm_r_s2_bra_noconj
+        fdrv = _ao2mo.libao2mo.AO2MOr_e2_drv
+        ftrans = libri.RItranse2_r_s2
+        vj = numpy.zeros_like(dm)
+        vk = numpy.zeros_like(dm)
+        fcopy = libri.RImmm_r_s2_transpose
+        rargs = (ctypes.c_int(n2c), (ctypes.c_int*4)(0, n2c, 0, 0),
+                 tao.ctypes.data_as(ctypes.c_void_p),
+                 ao_loc.ctypes.data_as(ctypes.c_void_p),
+                 ctypes.c_int(mol.nbas))
+        dmll = numpy.asarray(dm[:n2c,:n2c], order='C')
+        for erill in dfobj.loop():
+            naux, nao_pair = erill.shape
+            buf = numpy.empty((naux,n2c,n2c), dtype=numpy.complex)
+            buf1 = numpy.empty((naux,n2c,n2c), dtype=numpy.complex)
+
+            fdrv(ftrans, fmmm,
+                 buf.ctypes.data_as(ctypes.c_void_p),
+                 erill.ctypes.data_as(ctypes.c_void_p),
+                 dmll.ctypes.data_as(ctypes.c_void_p),
+                 ctypes.c_int(naux), *rargs) # buf == (P|LL)
+            rho = numpy.einsum('kii->k', buf)
+
+            fdrv(ftrans, fcopy,
+                 buf1.ctypes.data_as(ctypes.c_void_p),
+                 erill.ctypes.data_as(ctypes.c_void_p),
+                 dmll.ctypes.data_as(ctypes.c_void_p),
+                 ctypes.c_int(naux), *rargs) # buf1 == (P|LL)
+            vk[:n2c,:n2c] += numpy.dot(buf1.reshape(-1,n2c).T,
+                                       buf.reshape(-1,n2c))
+            vj[:n2c,:n2c] += lib.unpack_tril(numpy.dot(rho, erill), 1)
+        return vj, vk
+
+    if isinstance(dms, numpy.ndarray) and dms.ndim == 2:
+        vj, vk = fjk(dms)
+    else:
+        vjk = [fjk(dm) for dm in dms]
+        vj = numpy.array([x[0] for x in vjk])
+        vk = numpy.array([x[1] for x in vjk])
+    logger.timer(dfobj, 'vj and vk', *t0)
+    return vj, vk
 
 if __name__ == '__main__':
     import pyscf.gto
