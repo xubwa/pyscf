@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2018-2019 The PySCF Developers. All Rights Reserved.
+# Copyright 2018-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Author: Bryan Lau
+# Author: Bryan Lau <blau1270@gmail.com>
 #         Qiming Sun <osirpt.sun@gmail.com>
 #
 
@@ -140,7 +140,7 @@ def general(eri, mo_coeffs, erifile, dataname='eri_mo',
 
     if isinstance(erifile, str):
         if h5py.is_hdf5(erifile):
-            feri = h5py.File(erifile)
+            feri = h5py.File(erifile, 'a')
             if dataname in feri:
                 del(feri[dataname])
         else:
@@ -161,7 +161,7 @@ def general(eri, mo_coeffs, erifile, dataname='eri_mo',
     log.debug('  Half transformed eri size (MB): {:.3g}'
               .format(nij_pair*nao_pair*typesize))
     log.debug('  RAM buffer (MB): {:.3g}'
-             .format(nij_pair*IOBLK_SIZE*typesize*2))
+              .format(nij_pair*IOBLK_SIZE*typesize*2))
 
     if eri_ao.size == nao_pair**2: # 4-fold symmetry
         # half_e1 first transforms the indices which are contiguous in memory
@@ -200,8 +200,11 @@ def general(eri, mo_coeffs, erifile, dataname='eri_mo',
                      ctypes.c_int(ijshape[2]), ctypes.c_int(ijshape[3]))
             else:  # complex
                 tmp = numpy.empty((p1-p0, nao_pair))
-                for i in range(p0, p1):
-                    tmp[i-p0] = lib.unpack_row(eri_ao, i)
+                if eri_ao.size == nao_pair**2: # 4-fold symmetry
+                    tmp = eri_ao[p0:p1]
+                else: # 8-fold symmetry
+                    for i in range(p0, p1):
+                        tmp[i-p0] = lib.unpack_row(eri_ao, i)
                 tmp = lib.unpack_tril(tmp, filltriu=lib.SYMMETRIC)
                 buf = lib.einsum('xpq,pi,qj->xij', tmp, mo_coeffs[0].conj(), mo_coeffs[1])
                 if ij_red:
@@ -248,9 +251,6 @@ def general(eri, mo_coeffs, erifile, dataname='eri_mo',
     if isinstance(erifile, str):
         feri.close()
     return erifile
-
-def iden_coeffs(mo1, mo2):
-    return (id(mo1) == id(mo2)) or (mo1.shape==mo2.shape and numpy.allclose(mo1,mo2))
 
 if __name__ == '__main__':
     import tempfile
@@ -306,7 +306,7 @@ if __name__ == '__main__':
     stop_time2 = time.time() - start_time
     print('    Time elapsed (s): ',stop_time2)
     print('How worse is the custom implemenation?',stop_time/stop_time2)
-    with h5py.File(tmpfile2.name) as f:
+    with h5py.File(tmpfile2.name, 'r') as f:
         print('\n\nIncore (pyscf) vs outcore (custom)?',numpy.allclose(onnn2,f['aa']))
         print('Outcore (pyscf) vs outcore (custom)?',numpy.allclose(f['ab'],f['aa']))
 
@@ -322,7 +322,7 @@ if __name__ == '__main__':
     stop_time2 = time.time() - start_time
     print('    Time elapsed (s): ',stop_time2)
     print('    How worse is the custom implemenation?',stop_time/stop_time2)
-    with h5py.File(tmpfile2.name) as f:
+    with h5py.File(tmpfile2.name, 'r') as f:
         print('\n\nIncore (pyscf) vs outcore (custom)?',numpy.allclose(eri_incore,f['aa']))
         print('Outcore (pyscf) vs outcore (custom)?',numpy.allclose(f['ab'],f['aa']))
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,12 +31,16 @@ direct_nosym        No            No             No**               Yes
 
 *  Real hermitian Hamiltonian implies (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)
 ** Hamiltonian is real but not hermitian, (ij|kl) != (ji|kl) ...
+
+direct_spin0 solver is specified for singlet state. However, calling this
+solver sometimes ends up with the error "State not singlet x.xxxxxxe-06" due
+to numerical issues. Calling direct_spin1 for singlet state is slightly
+slower but more robust than direct_spin0 especially when combining to energy
+penalty method (:func:`fix_spin_`)
 '''
 
-import sys
 import ctypes
 import numpy
-import scipy.linalg
 from pyscf import lib
 from pyscf import ao2mo
 from pyscf.lib import logger
@@ -331,7 +335,7 @@ def _check_(c):
     c *= .5
     norm = numpy.linalg.norm(c)
     if abs(norm-1) > 1e-6:
-        raise ValueError('State not singlet %g' % abs(numpy.linalg.norm(c)-1))
+        raise ValueError('State not singlet %g' % (norm - 1))
     return c/norm
 
 

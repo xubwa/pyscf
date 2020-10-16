@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
+# -*- coding: utf-8 -*-
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,6 +29,7 @@ import ctypes
 import math
 import numpy
 from pyscf import lib
+from pyscf.dft.xc.utils import remove_dup, format_xc_code
 
 
 _itrf = lib.load_library('libxc_itrf')
@@ -591,8 +593,6 @@ XC_CODES.update({
 'VWNRPA'        : 8,
 'VWN5'          : 7,
 'B88'           : 106,
-'BLYP'          : 'B88,LYP',
-'BP86'          : 'B88,P86',
 'PBE0'          : 406,
 'PBE1PBE'       : 406,
 'OPTXCORR'      : '0.7344536875999693*SLATER - 0.6984752285760186*OPTX,',
@@ -718,7 +718,9 @@ PROBLEMATIC_XC = dict([(XC_CODES[x], x) for x in
                        ('GGA_C_SPBE', 'MGGA_X_REVTPSS')])
 
 def xc_type(xc_code):
-    if isinstance(xc_code, str):
+    if xc_code is None:
+        return None
+    elif isinstance(xc_code, str):
         if is_nlc(xc_code):
             return 'NLC'
         hyb, fn_facs = parse_xc(xc_code)
@@ -739,7 +741,9 @@ def is_lda(xc_code):
     return xc_type(xc_code) == 'LDA'
 
 def is_hybrid_xc(xc_code):
-    if isinstance(xc_code, str):
+    if xc_code is None:
+        return False
+    elif isinstance(xc_code, str):
         if xc_code.isdigit():
             return _itrf.LIBXC_is_hybrid(ctypes.c_int(int(xc_code)))
         else:
@@ -810,8 +814,8 @@ def nlc_coeff(xc_code):
 def rsh_coeff(xc_code):
     '''Range-separated parameter and HF exchange components: omega, alpha, beta
 
-    Exc_RSH = c_SR * SR_HFX + c_LR * LR_HFX + (1-c_SR) * Ex_SR + (1-c_LR) * Ex_LR + Ec
-            = alpha * HFX + beta * SR_HFX + (1-c_SR) * Ex_SR + (1-c_LR) * Ex_LR + Ec
+    Exc_RSH = c_LR * LR_HFX + c_SR * SR_HFX + (1-c_SR) * Ex_SR + (1-c_LR) * Ex_LR + Ec
+            = alpha * HFX   + beta * SR_HFX + (1-c_SR) * Ex_SR + (1-c_LR) * Ex_LR + Ec
             = alpha * LR_HFX + hyb * SR_HFX + (1-c_SR) * Ex_SR + (1-c_LR) * Ex_LR + Ec
 
     SR_HFX = < pi | e^{-omega r_{12}}/r_{12} | iq >
@@ -819,11 +823,14 @@ def rsh_coeff(xc_code):
     alpha = c_LR
     beta = c_SR - c_LR = hyb - alpha
     '''
+    if xc_code is None:
+        return 0, 0, 0
 
     check_omega = True
     if isinstance(xc_code, str) and ',' in xc_code:
         # Parse only X part for the RSH coefficients.  This is to handle
         # exceptions for C functionals such as M11.
+        xc_code = format_xc_code(xc_code)
         xc_code = xc_code.split(',')[0] + ','
         if 'SR_HF' in xc_code or 'LR_HF' in xc_code or 'RSH(' in xc_code:
             check_omega = False
@@ -842,7 +849,8 @@ def rsh_coeff(xc_code):
         elif check_omega:
             # Check functional is actually a CAM functional
             if rsh_tmp[0] != 0 and not _itrf.LIBXC_is_cam_rsh(ctypes.c_int(xid)):
-                raise KeyError('Libxc functional %i employs a range separation kernel that is not supported in PySCF' % xid)
+                raise KeyError('Libxc functional %i employs a range separation '
+                               'kernel that is not supported in PySCF' % xid)
             # Check omega
             if (rsh_tmp[0] != 0 and rsh_pars[0] != rsh_tmp[0]):
                 raise ValueError('Different values of omega found for RSH functionals')
@@ -887,7 +895,7 @@ def parse_xc(description):
       correlation functional part is the same to putting "HF" in exchange
       part.
     * String "RSH" means range-separated operator. Its format is
-      RSH(alpha; beta; omega).  Another way to input RSH is to use keywords
+      RSH(omega, alpha, beta).  Another way to input RSH is to use keywords
       SR_HF and LR_HF: "SR_HF(0.1) * alpha_plus_beta" and "LR_HF(0.1) *
       alpha" where the number in parenthesis is the value of omega.
     * Be careful with the libxc convention on GGA functional, in which the LDA
@@ -963,7 +971,9 @@ def parse_xc(description):
         see also libxc_itrf.c
     '''
     hyb = [0, 0, 0]  # hybrid, alpha, omega (== SR_HF, LR_HF, omega)
-    if isinstance(description, int):
+    if description is None:
+        return hyb, []
+    elif isinstance(description, int):
         return hyb, [(description, 1.)]
     elif not isinstance(description, str): #isinstance(description, (tuple,list)):
         return parse_xc('%s,%s' % tuple(description))
@@ -979,6 +989,7 @@ def parse_xc(description):
         else:
             raise ValueError('Different values of omega found for RSH functionals')
     fn_facs = []
+
     def parse_token(token, ftype, search_xc_alias=False):
         if token:
             if token[0] == '-':
@@ -995,7 +1006,7 @@ def parse_xc(description):
                 fac, key = sign, token
 
             if key[:3] == 'RSH':
-# RSH(alpha; beta; omega): Range-separated-hybrid functional
+                # RSH(alpha; beta; omega): Range-separated-hybrid functional
                 alpha, beta, omega = [float(x) for x in key[4:-1].split(';')]
                 assign_omega(omega, fac*(alpha+beta), fac*alpha)
             elif key == 'HF':
@@ -1073,20 +1084,7 @@ def parse_xc(description):
                      'K': possible_k_for,
                      'X or K': possible_x_k_for}
 
-    def remove_dup(fn_facs):
-        fn_ids = []
-        facs = []
-        n = 0
-        for key, val in fn_facs:
-            if key in fn_ids:
-                facs[fn_ids.index(key)] += val
-            else:
-                fn_ids.append(key)
-                facs.append(val)
-                n += 1
-        return list(zip(fn_ids, facs))
-
-    description = description.replace(' ','').upper()
+    description = format_xc_code(description)
 
     if '-' in description:  # To handle e.g. M06-L
         for key in _NAME_WITH_DASH:
@@ -1146,21 +1144,50 @@ def eval_xc(xc_code, rho, spin=0, relativity=0, deriv=1, omega=None, verbose=Non
     * The given functional xc_code must be a one-line string.
     * The functional xc_code is case-insensitive.
     * The functional xc_code string has two parts, separated by ",".  The
-      first part describes the exchange functional, the second is the correlation
-      functional.
+      first part describes the exchange functional, the second part sets the
+      correlation functional.
 
-      - If "," not appeared in string, the entire string is considered as X functional.
-      - To neglect X functional (just apply C functional), leave blank in the
-        first part, eg description=',vwn' for pure VWN functional
+      - If "," not appeared in string, the entire string is treated as the
+        name of a compound functional (containing both the exchange and
+        the correlation functional) which was declared in the functional
+        aliases list. The full list of functional aliases can be obtained by
+        calling the function pyscf.dft.xcfun.XC_ALIAS.keys() .
 
-    * The functional name can be placed in arbitrary order.  Two name needs to
+        If the string was not found in the aliased functional list, it is
+        treated as X functional.
+
+      - To input only X functional (without C functional), leave the second
+        part blank. E.g. description='slater,' means a functional with LDA
+        contribution only.
+
+      - To neglect the contribution of X functional (just apply C functional),
+        leave blank in the first part, e.g. description=',vwn' means a
+        functional with VWN only.
+
+      - If compound XC functional is specified, no matter whether it is in the
+        X part (the string in front of comma) or the C part (the string behind
+        comma), both X and C functionals of the compound XC functional will be
+        used.
+
+    * The functional name can be placed in arbitrary order.  Two names need to
       be separated by operators "+" or "-".  Blank spaces are ignored.
-      NOTE the parser only reads operators "+" "-" "*".  / is not in support.
-    * A functional name is associated with one factor.  If the factor is not
-      given, it is assumed equaling 1.
-    * String "HF" stands for exact exchange (HF K matrix).  It is allowed to
-      put in C functional part.
-    * Be careful with the libxc convention on GGA functional, in which the LDA
+      NOTE the parser only reads operators "+" "-" "*".  / is not supported.
+
+    * A functional name can have at most one factor.  If the factor is not
+      given, it is set to 1.  Compound functional can be scaled as a unit. For
+      example '0.5*b3lyp' is equivalent to
+      'HF*0.1 + .04*LDA + .36*B88, .405*LYP + .095*VWN'
+
+    * String "HF" stands for exact exchange (HF K matrix).  "HF" can be put in
+      the correlation functional part (after comma). Putting "HF" in the
+      correlation part is the same to putting "HF" in the exchange part.
+
+    * String "RSH" means range-separated operator. Its format is
+      RSH(alpha; beta; omega).  Another way to input RSH is to use keywords
+      SR_HF and LR_HF: "SR_HF(0.1) * alpha_plus_beta" and "LR_HF(0.1) *
+      alpha" where the number in parenthesis is the value of omega.
+
+    * Be careful with the libxc convention of GGA functional, in which the LDA
       contribution is included.
 
     Args:
@@ -1374,8 +1401,11 @@ def define_xc_(ni, description, xctype='LDA', hyb=0, rsh=(0,0,0)):
             'LDA' or 'GGA' or 'MGGA'
         hyb : float
             hybrid functional coefficient
-        rsh : float
-            coefficients for range-separated hybrid functional
+        rsh : a list of three floats
+            coefficients (omega, alpha, beta) for range-separated hybrid functional.
+            omega is the exponent factor in attenuated Coulomb operator e^{-omega r_{12}}/r_{12}
+            alpha is the coefficient for long-range part, hybrid coefficient
+            can be obtained by alpha + beta
 
     Examples:
 

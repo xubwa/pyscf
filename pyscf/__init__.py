@@ -1,4 +1,4 @@
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,13 +35,15 @@ to try out the package::
 
 '''
 
-__version__ = '1.7.0a'
+__version__ = '1.7.5'
 
 import os
 # Avoid too many threads being created in OMP loops.
 # See issue https://github.com/pyscf/pyscf/issues/317
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
+if 'OPENBLAS_NUM_THREADS' not in os.environ:
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+if 'MKL_NUM_THREADS' not in os.environ:
+    os.environ['MKL_NUM_THREADS'] = '1'
 
 import sys
 from distutils.version import LooseVersion
@@ -52,10 +54,18 @@ if LooseVersion(numpy.__version__) <= '1.8.0':
                       "You still can use all features of PySCF with the old numpy by removing this warning msg. "
                       "Some modules (DFT, CC, MRPT) might be affected because of the bug in old numpy." %
                       numpy.__version__)
-elif LooseVersion(numpy.__version__) >= '1.16':
-    sys.stderr.write('Numpy 1.16 has memory leak bug  '
-                     'https://github.com/numpy/numpy/issues/13808\n'
-                     'It is recommended to downgrade to numpy 1.15 or older\n')
+elif '1.16.2' <= LooseVersion(numpy.__version__) < '1.18':
+    #sys.stderr.write('Numpy 1.16 has memory leak bug  '
+    #                 'https://github.com/numpy/numpy/issues/13808\n'
+    #                 'It is recommended to downgrade to numpy 1.15 or older\n')
+    import ctypes
+    from numpy.core import _internal
+    def _get_void_ptr(arr):
+        simple_arr = numpy.asarray(_internal._unsafe_first_element_pointer(arr))
+        c_arr = (ctypes.c_char * 0).from_buffer(simple_arr)
+        return ctypes.cast(ctypes.byref(c_arr), ctypes.c_void_p)
+    # patch _get_void_ptr as a workaround to numpy issue #13808
+    _internal._get_void_ptr = _get_void_ptr
 
 from pyscf import __config__
 from pyscf import lib
@@ -64,7 +74,7 @@ from pyscf import scf
 from pyscf import ao2mo
 
 #__path__.append(os.path.join(os.path.dirname(__file__), 'future'))
-__path__.append(os.path.join(os.path.dirname(__file__), 'tools'))
+#__path__.append(os.path.join(os.path.dirname(__file__), 'tools'))
 
 DEBUG = __config__.DEBUG
 
@@ -76,4 +86,4 @@ def M(**kwargs):
     else:  # Molecule
         return gto.M(**kwargs)
 
-del(os, sys, LooseVersion, numpy)
+del(os, sys, LooseVersion)

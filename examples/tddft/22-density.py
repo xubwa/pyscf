@@ -37,6 +37,8 @@ def tda_denisty_matrix(td, state_id):
 
     # Add CIS contribution
     nocc = cis_t1.shape[0]
+    # Note that dm_oo and dm_vv correspond to spin-up contribution. "*2" to
+    # include the spin-down contribution
     dm[:nocc,:nocc] += dm_oo * 2
     dm[nocc:,nocc:] += dm_vv * 2
 
@@ -54,3 +56,7 @@ cubegen.density(mol, 'tda_density.cube', dm)
 
 # Write the difference between excited state and ground state
 cubegen.density(mol, 'density_diff.cube', dm-mf.make_rdm1())
+
+# The positive and negative parts can be overlayed in Jmol
+# isosurface ID "surf1" cutoff  0.02 density_diff.cube
+# isosurface ID "surf2" cutoff -0.02 density_diff.cube

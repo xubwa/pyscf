@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,16 +21,15 @@
 #
 
 import time
-from functools import reduce
 import numpy
 from pyscf import lib
 from pyscf import symm
-from pyscf.dft import numint
+from pyscf import scf
 from pyscf.tdscf import rhf
 from pyscf.scf import hf_symm
-from pyscf.ao2mo import _ao2mo
+from pyscf.scf import _response_functions  # noqa
 from pyscf.data import nist
-from pyscf.soscf.newton_ah import _gen_rhf_response
+from pyscf.dft.rks import KohnShamDFT
 from pyscf import __config__
 
 # Low excitation filter to avoid numerical instability
@@ -73,32 +72,33 @@ class TDDFTNoHybrid(TDA):
             if isinstance(wfnsym, str):
                 wfnsym = symm.irrep_name2id(mol.groupname, wfnsym)
             wfnsym = wfnsym % 10  # convert to D2h subgroup
-            orbsym = hf_symm.get_orbsym(mol, mo_coeff) % 10
-            sym_forbid = (orbsym[occidx,None] ^ orbsym[viridx]) != wfnsym
+            orbsym = hf_symm.get_orbsym(mol, mo_coeff)
+            orbsym_in_d2h = numpy.asarray(orbsym) % 10  # convert to D2h irreps
+            sym_forbid = (orbsym_in_d2h[occidx,None] ^ orbsym_in_d2h[viridx]) != wfnsym
 
         e_ia = (mo_energy[viridx].reshape(-1,1) - mo_energy[occidx]).T
         if wfnsym is not None and mol.symmetry:
             e_ia[sym_forbid] = 0
-        d_ia = numpy.sqrt(e_ia).ravel()
-        ed_ia = e_ia.ravel() * d_ia
+        d_ia = numpy.sqrt(e_ia)
+        ed_ia = e_ia * d_ia
         hdiag = e_ia.ravel() ** 2
 
-        vresp = _gen_rhf_response(mf, singlet=singlet, hermi=1)
+        vresp = mf.gen_response(singlet=singlet, hermi=1)
 
         def vind(zs):
-            nz = len(zs)
-            dmov = numpy.empty((nz,nao,nao))
-            for i, z in enumerate(zs):
-                # *2 for double occupancy
-                dm = reduce(numpy.dot, (orbo, (d_ia*z).reshape(nocc,nvir)*2, orbv.T))
-                dmov[i] = dm + dm.T # +cc for A+B and K_{ai,jb} in A == K_{ai,bj} in B
+            zs = numpy.asarray(zs).reshape(-1,nocc,nvir)
+            # *2 for double occupancy
+            dmov = lib.einsum('xov,ov,po,qv->xpq', zs, d_ia*2, orbo, orbv.conj())
+            # +cc for A+B and K_{ai,jb} in A == K_{ai,bj} in B
+            dmov = dmov + dmov.conj().transpose(0,2,1)
+
             v1ao = vresp(dmov)
-            v1ov = _ao2mo.nr_e2(v1ao, mo_coeff, (0,nocc,nocc,nmo)).reshape(-1,nocc*nvir)
-            for i, z in enumerate(zs):
-                # numpy.sqrt(e_ia) * (e_ia*d_ia*z + v1ov)
-                v1ov[i] += ed_ia*z
-                v1ov[i] *= d_ia
-            return v1ov.reshape(nz,-1)
+            v1ov = lib.einsum('xpq,po,qv->xov', v1ao, orbo.conj(), orbv)
+
+            # numpy.sqrt(e_ia) * (e_ia*d_ia*z + v1ov)
+            v1ov += numpy.einsum('xov,ov->xov', zs, ed_ia)
+            v1ov *= d_ia
+            return v1ov.reshape(v1ov.shape[0],-1)
 
         return vind, hdiag
 
@@ -169,22 +169,26 @@ class TDDFTNoHybrid(TDA):
 
 class dRPA(TDDFTNoHybrid):
     def __init__(self, mf):
-        if not getattr(mf, 'xc', None):
+        if not isinstance(mf, KohnShamDFT):
             raise RuntimeError("direct RPA can only be applied with DFT; for HF+dRPA, use .xc='hf'")
-        from pyscf import scf
         mf = scf.addons.convert_to_rhf(mf)
-        mf.xc = '0.0*LDA'
+        # commit fc8d1967995b7e033b60d4428ddcca87aac78e4f handles xc='' .
+        # xc='0*LDA' is equivalent to xc=''
+        #mf.xc = '0.0*LDA'
+        mf.xc = ''
         TDDFTNoHybrid.__init__(self, mf)
 
 TDH = dRPA
 
 class dTDA(TDA):
     def __init__(self, mf):
-        if not getattr(mf, 'xc', None):
+        if not isinstance(mf, KohnShamDFT):
             raise RuntimeError("direct TDA can only be applied with DFT; for HF+dTDA, use .xc='hf'")
-        from pyscf import scf
         mf = scf.addons.convert_to_rhf(mf)
-        mf.xc = '0.0*LDA'
+        # commit fc8d1967995b7e033b60d4428ddcca87aac78e4f handles xc='' .
+        # xc='0*LDA' is equivalent to xc=''
+        #mf.xc = '0.0*LDA'
+        mf.xc = ''
         TDA.__init__(self, mf)
 
 
@@ -199,7 +203,7 @@ from pyscf import dft
 dft.rks.RKS.TDA           = dft.rks_symm.RKS.TDA           = lib.class_as_method(TDA)
 dft.rks.RKS.TDHF          = dft.rks_symm.RKS.TDHF          = None
 #dft.rks.RKS.TDDFT         = dft.rks_symm.RKS.TDDFT         = lib.class_as_method(TDDFT)
-#dft.rks.RKS.TDDFTNoHybrid = dft.rks_symm.RKS.TDDFTNoHybrid = lib.class_as_method(TDDFTNoHybrid)
+dft.rks.RKS.TDDFTNoHybrid = dft.rks_symm.RKS.TDDFTNoHybrid = lib.class_as_method(TDDFTNoHybrid)
 dft.rks.RKS.TDDFT         = dft.rks_symm.RKS.TDDFT         = tddft
 dft.rks.RKS.dTDA          = dft.rks_symm.RKS.dTDA          = lib.class_as_method(dTDA)
 dft.rks.RKS.dRPA          = dft.rks_symm.RKS.dRPA          = lib.class_as_method(dRPA)
@@ -212,7 +216,6 @@ dft.roks.ROKS.dRPA          = dft.rks_symm.ROKS.dRPA          = None
 
 if __name__ == '__main__':
     from pyscf import gto
-    from pyscf import scf
     from pyscf import dft
     mol = gto.Mole()
     mol.verbose = 0

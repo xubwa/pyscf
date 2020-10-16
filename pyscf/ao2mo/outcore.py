@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ def full(mol, mo_coeff, erifile, dataname='eri_mo',
     >>> from pyscf import ao2mo
     >>> import h5py
     >>> def view(h5file, dataname='eri_mo'):
-    ...     f5 = h5py.File(h5file)
+    ...     f5 = h5py.File(h5file, 'r')
     ...     print('dataset %s, shape %s' % (str(f5.keys()), str(f5[dataname].shape)))
     ...     f5.close()
     >>> mol = gto.M(atom='O 0 0 0; H 0 1 0; H 0 0 1', basis='sto3g')
@@ -173,7 +173,7 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
     >>> from pyscf import ao2mo
     >>> import h5py
     >>> def view(h5file, dataname='eri_mo'):
-    ...     f5 = h5py.File(h5file)
+    ...     f5 = h5py.File(h5file, 'r')
     ...     print('dataset %s, shape %s' % (str(f5.keys()), str(f5[dataname].shape)))
     ...     f5.close()
     >>> mol = gto.M(atom='O 0 0 0; H 0 1 0; H 0 0 1', basis='sto3g')
@@ -203,6 +203,9 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
     >>> view('oh2.h5')
     dataset ['eri_mo', 'new'], shape (3, 100, 55)
     '''
+    if any(c.dtype == numpy.complex for c in mo_coeffs):
+        raise NotImplementedError('Integral transformation for complex orbitals')
+
     time_0pass = (time.clock(), time.time())
     log = logger.new_logger(mol, verbose)
 
@@ -236,7 +239,7 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
 
     if isinstance(erifile, str):
         if h5py.is_hdf5(erifile):
-            feri = h5py.File(erifile)
+            feri = h5py.File(erifile, 'a')
             if dataname in feri:
                 del(feri[dataname])
         else:
@@ -298,7 +301,7 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
               nao_pair, nkl_pair, iobuflen*nao_pair*8/1e6,
               iobuflen*nkl_pair*8/1e6)
 
-    klaoblks = len(fswap['0'])
+    #klaoblks = len(fswap['0'])
     ijmoblks = int(numpy.ceil(float(nij_pair)/iobuflen)) * comp
     ao_loc = mol.ao_loc_nr('_cart' in intor)
     ti0 = time_1pass
@@ -391,6 +394,9 @@ def half_e1(mol, mo_coeffs, swapfile,
         None
 
     '''
+    if any(c.dtype == numpy.complex for c in mo_coeffs):
+        raise NotImplementedError('Integral transformation for complex orbitals')
+
     intor = mol._add_suffix(intor)
     time0 = (time.clock(), time.time())
     log = logger.new_logger(mol, verbose)
@@ -427,7 +433,7 @@ def half_e1(mol, mo_coeffs, swapfile,
     else:
         fswap = lib.H5TmpFile(swapfile)
     for icomp in range(comp):
-        g = fswap.create_group(str(icomp)) # for h5py old version
+        fswap.create_group(str(icomp)) # for h5py old version
 
     log.debug('step1: tmpfile %s  %.8g MB', fswap.filename, nij_pair*nao_pair*8/1e6)
     log.debug('step1: (ij,kl) = (%d,%d), mem cache %.8g MB, iobuf %.8g MB',
@@ -450,7 +456,7 @@ def half_e1(mol, mo_coeffs, swapfile,
         fill = _ao2mo.nr_e1fill
         f_e1 = _ao2mo.nr_e1
         for istep,sh_range in enumerate(shranges):
-            log.debug1('step 1 [%d/%d], AO [%d:%d], len(buf) = %d', \
+            log.debug1('step 1 [%d/%d], AO [%d:%d], len(buf) = %d',
                        istep+1, nstep, *(sh_range[:3]))
             buflen = sh_range[2]
             iobuf = numpy.ndarray((comp,buflen,nij_pair), buffer=buf2)
@@ -472,14 +478,24 @@ def half_e1(mol, mo_coeffs, swapfile,
     fswap = None
     return swapfile
 
-def _load_from_h5g(h5group, row0, row1, out):
-    nrow = row1 - row0
-    col0 = 0
-    for key in range(len(h5group)):
-        dat = h5group[str(key)][row0:row1]
-        col1 = col0 + dat.shape[1]
-        out[:nrow,col0:col1] = dat
-        col0 = col1
+def _load_from_h5g(h5group, row0, row1, out=None):
+    nkeys = len(h5group)
+    dat = h5group['0']
+    ncol = sum(h5group[str(key)].shape[-1] for key in range(nkeys))
+    if dat.ndim == 2:
+        out = numpy.ndarray((row1-row0, ncol), dat.dtype, buffer=out)
+        col1 = 0
+        for key in range(nkeys):
+            dat = h5group[str(key)][row0:row1]
+            col0, col1 = col1, col1 + dat.shape[1]
+            out[:,col0:col1] = dat
+    else:  # multiple components
+        out = numpy.ndarray((dat.shape[0], row1-row0, ncol), dat.dtype, buffer=out)
+        col1 = 0
+        for key in range(nkeys):
+            dat = h5group[str(key)][:,row0:row1]
+            col0, col1 = col1, col1 + dat.shape[2]
+            out[:,:,col0:col1] = dat
     return out
 
 def _transpose_to_h5g(h5group, key, dat, blksize, chunks=None):
@@ -629,7 +645,7 @@ def general_iofree(mol, mo_coeffs, intor='int2e', aosym='s4', comp=None,
     >>> from pyscf import ao2mo
     >>> import h5py
     >>> def view(h5file, dataname='eri_mo'):
-    ...     f5 = h5py.File(h5file)
+    ...     f5 = h5py.File(h5file, 'r')
     ...     print('dataset %s, shape %s' % (str(f5.keys()), str(f5[dataname].shape)))
     ...     f5.close()
     >>> mol = gto.M(atom='O 0 0 0; H 0 1 0; H 0 0 1', basis='sto3g')
@@ -729,7 +745,7 @@ def guess_shell_ranges(mol, aosym, max_iobuf, max_aobuf=None, ao_loc=None,
     if max_aobuf is not None:
         max_aobuf = max(1, max_aobuf)
         def div_each_iobuf(ijstart, ijstop, buflen):
-# to fill each iobuf, AO integrals may need to be fill to aobuf several times
+            # to fill each iobuf, AO integrals may need to be fill to aobuf several times
             return (ijstart, ijstop, buflen,
                     balance_partition(dij_loc, max_aobuf, ijstart, ijstop))
         ijsh_range = [div_each_iobuf(*x) for x in ijsh_range]
@@ -763,7 +779,6 @@ del(MAX_MEMORY)
 
 if __name__ == '__main__':
     from pyscf import scf
-    from pyscf import gto
     from pyscf.ao2mo import addons
     mol = gto.Mole()
     mol.verbose = 5

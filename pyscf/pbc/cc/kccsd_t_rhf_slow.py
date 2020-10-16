@@ -19,7 +19,6 @@ from pyscf.lib.misc import flatten
 from pyscf.lib.numpy_helper import cartesian_prod
 from pyscf.lib.numpy_helper import pack_tril
 from pyscf.lib.parameters import LARGE_DENOM
-from pyscf.pbc import scf
 from pyscf.pbc.lib import kpts_helper
 from pyscf.pbc.mp.kmp2 import (get_frozen_mask, get_nocc, get_nmo,
                                padded_mo_coeff, padding_k_idx)
@@ -255,7 +254,7 @@ if __name__ == '__main__':
     eris = myscc.ao2mo()
     sup_ecc, t1, t2 = myscc.kernel(eris=eris)
     sup_energy_t = myscc.ccsd_t(eris=eris)
-    print "Kpoint    CCSD: %20.16f" % ecc
-    print "Supercell CCSD: %20.16f" % (sup_ecc/np.prod(nmp))
-    print "Kpoint    CCSD(T): %20.16f" % energy_t
-    print "Supercell CCSD(T): %20.16f" % (sup_energy_t/np.prod(nmp))
+    print("Kpoint    CCSD: %20.16f" % ecc)
+    print("Supercell CCSD: %20.16f" % (sup_ecc/np.prod(nmp)))
+    print("Kpoint    CCSD(T): %20.16f" % energy_t)
+    print("Supercell CCSD(T): %20.16f" % (sup_energy_t/np.prod(nmp)))

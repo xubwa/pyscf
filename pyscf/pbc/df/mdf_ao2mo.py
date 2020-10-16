@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@
 import numpy
 from pyscf import lib
 from pyscf.ao2mo import _ao2mo
-from pyscf.ao2mo.incore import iden_coeffs, _conc_mos
+from pyscf.ao2mo.incore import _conc_mos
 from pyscf.pbc.df.fft_ao2mo import _format_kpts
 from pyscf.pbc.df import df_ao2mo
 from pyscf.pbc.df import aft_ao2mo
 from pyscf.pbc.lib import kpts_helper
-from pyscf.pbc.lib.kpts_helper import is_zero, gamma_point, member, unique
+from pyscf.pbc.lib.kpts_helper import gamma_point, unique
 from pyscf import __config__
 
 
@@ -84,7 +84,6 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
     kpt_ji = kptjs_lst - kptis_lst
     uniq_kpts, uniq_index, uniq_inverse = unique(kpt_ji)
     ngrids = numpy.prod(mydf.mesh)
-
     nao = cell.nao_nr()
     max_memory = max(2000, mydf.max_memory-lib.current_memory()[0]-nao**4*16/1e6) * .5
 
@@ -110,11 +109,12 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
             ijslice_list.append(ijslice)
             fswap.create_dataset('zij/'+str(ji), (ngrids,nmoi*nmoj), 'D')
 
-        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, kptjs):
+        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, kptjs,
+                                           max_memory=max_memory):
             for ji, aoao in enumerate(aoaoks):
                 ki = adapted_ji_idx[ji] // nkpts
                 kj = adapted_ji_idx[ji] %  nkpts
-                buf = aoao.transpose(1,2,0).reshape(nao**2,ngrids)
+                buf = aoao.transpose(1,2,0).reshape(nao**2,p1-p0)
                 zij = _ao2mo.r_e2(lib.transpose(buf), moij_list[ji],
                                   ijslice_list[ji], tao, ao_loc)
                 zij *= coulG[p0:p1,None]
@@ -132,9 +132,10 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
         ki = adapted_ji_idx[0] // nkpts
         kj = adapted_ji_idx[0] % nkpts
         kptls = kpts[kconserv[ki, kj, :]]
-        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, -kptls):
+        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, -kptls,
+                                           max_memory=max_memory):
             for kk, aoao in enumerate(aoaoks):
-                buf = aoao.conj().transpose(1,2,0).reshape(nao**2,ngrids)
+                buf = aoao.conj().transpose(1,2,0).reshape(nao**2,p1-p0)
                 zkl = _ao2mo.r_e2(lib.transpose(buf), mokl_list[kk],
                                   klslice_list[kk], tao, ao_loc)
                 fswap['zkl/'+str(kk)][p0:p1] = zkl

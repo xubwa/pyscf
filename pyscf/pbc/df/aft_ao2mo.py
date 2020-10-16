@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,20 +20,17 @@
 Integral transformation with analytic Fourier transformation
 '''
 
-import time
 import numpy
 from pyscf import lib
 from pyscf import ao2mo
 from pyscf.ao2mo import _ao2mo
 from pyscf.ao2mo.incore import iden_coeffs, _conc_mos
-from pyscf.lib import logger
-from pyscf.pbc import tools
-from pyscf.pbc.df.df_jk import zdotNN, zdotCN, zdotNC
+from pyscf.pbc.df.df_jk import zdotNC
 from pyscf.pbc.df.fft_ao2mo import _format_kpts, _iskconserv
 from pyscf.pbc.df.df_ao2mo import _mo_as_complex, _dtrans, _ztrans
 from pyscf.pbc.df.df_ao2mo import warn_pbc2d_eri
 from pyscf.pbc.lib import kpts_helper
-from pyscf.pbc.lib.kpts_helper import is_zero, gamma_point, member, unique
+from pyscf.pbc.lib.kpts_helper import is_zero, gamma_point, unique
 from pyscf import __config__
 
 
@@ -238,6 +235,7 @@ def get_ao_pairs_G(mydf, kpts=numpy.zeros((2,3)), q=None, shls_slice=None,
     q = kpts[1] - kpts[0]
     coords = cell.gen_uniform_grids(mydf.mesh)
     ngrids = len(coords)
+    max_memory = max(2000, (mydf.max_memory - lib.current_memory()[0]) * .5)
 
     if shls_slice is None:
         shls_slice = (0, cell.nbas, 0, cell.nbas)
@@ -256,7 +254,7 @@ def get_ao_pairs_G(mydf, kpts=numpy.zeros((2,3)), q=None, shls_slice=None,
 
     ao_pairs_G = numpy.empty((ngrids,(i1-i0)*(j1-j0)), dtype=numpy.complex)
     for pqkR, pqkI, p0, p1 \
-            in mydf.pw_loop(mydf.mesh, kptijkl[:2], q, shls_slice,
+            in mydf.pw_loop(mydf.mesh, kpts, q, shls_slice,
                             max_memory=max_memory, aosym=aosym):
         ao_pairs_G[p0:p1] = pqkR.T + pqkI.T * 1j
     return ao_pairs_G
@@ -282,12 +280,14 @@ def get_mo_pairs_G(mydf, mo_coeffs, kpts=numpy.zeros((2,3)), q=None,
     nmoi = mo_coeffs[0].shape[1]
     nmoj = mo_coeffs[1].shape[1]
     ngrids = len(coords)
+    max_memory = max(2000, (mydf.max_memory - lib.current_memory()[0]) * .5)
 
     mo_pairs_G = numpy.empty((ngrids,nmoi,nmoj), dtype=numpy.complex)
+    nao = cell.nao
     for pqkR, pqkI, p0, p1 \
-            in mydf.pw_loop(mydf.mesh, kptijkl[:2], q,
+            in mydf.pw_loop(mydf.mesh, kpts, q,
                             max_memory=max_memory, aosym='s2'):
-        pqk = (pqkR + pqkI*1j).reshape(nao,nao,-1)
+        pqk = lib.unpack_tril(pqkR + pqkI*1j, axis=0).reshape(nao,nao,-1)
         mo_pairs_G[p0:p1] = lib.einsum('pqk,pi,qj->kij', pqk, *mo_coeffs[:2])
     return mo_pairs_G.reshape(ngrids,nmoi*nmoj)
 
@@ -325,6 +325,7 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
     uniq_kpts, uniq_index, uniq_inverse = unique(kpt_ji)
     ngrids = numpy.prod(mydf.mesh)
     nao = cell.nao
+    max_memory = max(2000, mydf.max_memory-lib.current_memory()[0]-nao**4*16/1e6) * .5
 
     # To hold intermediates
     fswap = lib.H5TmpFile()
@@ -348,15 +349,17 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
             ijslice_list.append(ijslice)
             fswap.create_dataset('zij/'+str(ji), (ngrids,nmoi*nmoj), 'D')
 
-        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, kptjs):
+        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, kptjs,
+                                           max_memory=max_memory):
             for ji, aoao in enumerate(aoaoks):
                 ki = adapted_ji_idx[ji] // nkpts
                 kj = adapted_ji_idx[ji] %  nkpts
-                buf = aoao.transpose(1,2,0).reshape(nao**2,ngrids)
+                buf = aoao.transpose(1,2,0).reshape(nao**2,p1-p0)
                 zij = _ao2mo.r_e2(lib.transpose(buf), moij_list[ji],
                                   ijslice_list[ji], tao, ao_loc)
                 zij *= coulG[p0:p1,None]
                 fswap['zij/'+str(ji)][p0:p1] = zij
+                buf = zij = None
 
         mokl_list = []
         klslice_list = []
@@ -370,12 +373,14 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
         ki = adapted_ji_idx[0] // nkpts
         kj = adapted_ji_idx[0] % nkpts
         kptls = kpts[kconserv[ki, kj, :]]
-        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, -kptls):
+        for aoaoks, p0, p1 in mydf.ft_loop(mydf.mesh, q, -kptls,
+                                           max_memory=max_memory):
             for kk, aoao in enumerate(aoaoks):
-                buf = aoao.conj().transpose(1,2,0).reshape(nao**2,ngrids)
+                buf = aoao.conj().transpose(1,2,0).reshape(nao**2,p1-p0)
                 zkl = _ao2mo.r_e2(lib.transpose(buf), mokl_list[kk],
                                   klslice_list[kk], tao, ao_loc)
                 fswap['zkl/'+str(kk)][p0:p1] = zkl
+                buf = zkl = None
 
         for ji, ji_idx in enumerate(adapted_ji_idx):
             ki = ji_idx // nkpts
@@ -395,7 +400,6 @@ def ao2mo_7d(mydf, mo_coeff_kpts, kpts=None, factor=1, out=None):
 
 if __name__ == '__main__':
     from pyscf.pbc import gto as pgto
-    from pyscf.pbc import scf as pscf
     from pyscf.pbc.df import AFTDF
 
     L = 5.
