@@ -80,7 +80,7 @@ def cg_complex(A, b, x, max_iter=1000, conv=1e-4):
         p = r + beta*p
     return vector_to_scalar(xz), r_norm
 
-def conjugateGradient(A, b, x, max_iter=10, conv=1.e-4):
+def conjugateGradient(A, b, x, max_iter=50, conv=1.e-4):
     r = b - A(x)
     p = 1*r
     rsold = numpy.dot(r,r)
@@ -192,6 +192,7 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
         t2m = t1m = log.timer('macro iter %d'%imacro, *t1m)
 
         de, elast = e_tot - elast, e_tot
+        print("de = %10.8g, gnorm = %8.6g, conv_tol = %8.6g" %(de, norm_gorb0, conv_tol_grad))
         if (abs(de) < tol and
             norm_gorb < conv_tol_grad and norm_ddm < conv_tol_ddm):
             conv = True
@@ -835,8 +836,8 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 
                 Hx = (Gnewp - G0)/eps
                 # shift diag of h by -\epsilon where \eps = \lambda^2 x.T.conj()*g
-                #shift = lib.einsum('ij,ij->', x_unpack.conj().T, Grad-Grad.conj().T)*x_unpack
-                #Hx -= shift
+                #shift = lib.einsum('ij,ij->', x_unpack.conj().T, Grad-Grad.conj().T)*0.5
+                #Hx -= casscf.pack_vars(shift*x_unpack)
                 #shift = numpy.dot(x, G) * x
                 #print("hop, %10.8g" %(shift))
                 
@@ -847,8 +848,8 @@ To enable the solvent model for CASSCF, the following code needs to be called
             def precond(x, y):
                 return x
 
-            x0 = 1.*G
-            x, norm = conjugateGradient(hop, -G, x0, conv = min(1e-4, gnorm*1e-4))
+            x0 = (1.)*G
+            x, norm = conjugateGradient(hop, -G, x0, conv = min(1e-4, gnorm*1e-3))
             #print(x, norm)
             #x, norm = cg_complex(hop, -G, x0, conv = gnorm*1e-4)
             return x, norm
@@ -856,12 +857,13 @@ To enable the solvent model for CASSCF, the following code needs to be called
         imicro, nmicro, T, Grad = 0, 10, numpy.zeros_like(mo), 0.*mo
         #Eold = self.calcE(mo, casdm1, casdm2).real
         Grad, Eold = self.calcGrad(mo, casdm1, casdm2)
-        Eolddf = self.calcEDF(mo, casdm1, casdm2).real
+        Graddf, Eolddf = self.calcGradDF(mo, casdm1, casdm2)
+        Eolddf = Eolddf.real
         gnorm = numpy.linalg.norm(Grad-Grad.T.conj())
         print("E = %18.12g, gnorm %8.6g" %(Eold, gnorm))
         while True:
             #find the newton step direction
-            x, norm = NewtonStep(self, mo, nocc, Grad)
+            x, norm = NewtonStep(self, mo, nocc, Graddf)
             T = self.unpack_vars(x)
  
             ###do line search along the AH direction
@@ -873,11 +875,12 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 #print ("%d  %6.3e  %18.12g   %18.12g   g=%6.2e"\
                 #    %(imicro, tau, Enewdf, Eolddf, gnorm))
                 if (Enewdf - Eolddf < 0.0):# - tau * 1e-4*gnorm):
-                    Grad, Enewdf = self.calcGradDF(monew, casdm1, casdm2)
-                    gnorm_df = numpy.linalg.norm(Grad-Grad.T.conj())
+                    Graddf, Enewdf = self.calcGradDF(monew, casdm1, casdm2)
+                    gnorm_df = numpy.linalg.norm(Graddf-Graddf.T.conj())
                     mo = 1.*monew
                     break
                 tau = tau/2.
+            #print(gnorm,numpy.linalg.norm(Grad-Grad.T.conj()), numpy.linalg.norm(Graddf-Graddf.T.conj()))  
             if (Eolddf < Enewdf):
                 print("energy doesn't drop at micro iteration")
                 return mo, Grad, imicro, gnorm
@@ -887,7 +890,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
             Eolddf = Enewdf
             imicro += 1
             #if gradient is converged then exit
-            if (gnorm_df < conv_tol*0.1 or imicro >= nmicro ):               
+            if (gnorm_df < conv_tol or imicro >= nmicro ): 
                 return mo, Grad, imicro, gnorm
         exit(0)
 
