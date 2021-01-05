@@ -13,6 +13,30 @@ from pyscf.lib import logger
 
 alpha = 1./LIGHT_SPEED
 c = LIGHT_SPEED
+LINEAR_DEP_THRESHOLD = 1e-9
+
+def _x2cmf_xmatrix(h, m, c):
+    n2 = m.shape[0]
+    nao = n2 // 2
+    try:
+        e, a = scipy.linalg.eigh(h, m)
+        cl = a[:nao,nao:]
+        cs = a[nao:,nao:]
+        x = numpy.linalg.solve(cl.T, cs.T).T  # B = XA
+    except scipy.linalg.LinAlgError:
+        d, t = numpy.linalg.eigh(m)
+        idx = d>LINEAR_DEP_THRESHOLD
+        t = t[:,idx] / numpy.sqrt(d[idx])
+        tht = reduce(numpy.dot, (t.T.conj(), h, t))
+        e, a = numpy.linalg.eigh(tht)
+        a = numpy.dot(t, a)
+        idx = e > -c**2
+        cl = a[:nao,idx]
+        cs = a[nao:,idx]
+        # X = B A^{-1} = B A^T S
+        x = cs.dot(cl.conj().T).dot(m)
+    return x
+    
 def get_socamf(atoms, basis):
     hso1e_atoms = {}
     factor = -alpha**2 * 0.25
@@ -50,12 +74,13 @@ def get_socamf(atoms, basis):
         from pyscf.scf import dhf
         x2c_obj = x2c.X2C(mol_atom)
         x2c_obj.xuncontract = False
-        x = x2c_obj.get_xmat()
+        vj, vk = dhf.get_jk_coulomb(mol_atom, dm, 1, mf_atom._coulomb_now)
+        x = _x2cmf_xmatrix(mf_atom.get_hcore() + vj - vk, mf_atom.get_ovlp(), c)
+        #x = x2c_obj.get_xmat()
         s = mol_atom.intor_symmetric('int1e_ovlp_spinor')
         t = mol_atom.intor_symmetric('int1e_spsp_spinor')*.5
         s1 = s + reduce(numpy.dot, (x.T.conj(), t, x)) * (.5/c**2)
         r = x2c._get_r(s, s1)
-        vj, vk = dhf.get_jk_coulomb(mol_atom, dm, 1, mf_atom._coulomb_now)
         vj_sf, vk_sf = dhf.get_jk_sf_coulomb(mol_atom, dm, 1, mf_atom._coulomb_now)
 
         veff_sd = (vj-vk)-(vj_sf-vk_sf)
@@ -64,7 +89,7 @@ def get_socamf(atoms, basis):
         g_ls = veff_sd[:n2c, n2c:]
         g_sl = veff_sd[n2c:, :n2c]
         g_ss = veff_sd[n2c:, n2c:]
-        g_so_mf = reduce(numpy.dot,(r.T.conj(), (g_ll+reduce(numpy.dot, (g_ls, x))+reduce(numpy.dot, (x.T.conj(), g_sl))+reduce(numpy.dot, (x.T.conj(), g_ss, x))),r))
+        g_so_mf = reduce(numpy.dot, (r.T.conj(), (g_ll+reduce(numpy.dot, (g_ls, x)) + reduce(numpy.dot, (x.T.conj(), g_sl))+reduce(numpy.dot, (x.T.conj(), g_ss, x))),r))
         hso1e_atoms[atom]=g_so_mf
     return hso1e_atoms
 

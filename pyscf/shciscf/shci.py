@@ -201,6 +201,7 @@ class SHCI(pyscf.lib.StreamObject):
         self.nroots = 1
         self.nPTiter = 0
         self.DoRDM = True
+        self.DoSpinRDM = False
         self.DoTRDM = False
         self.DoSOC = False
         self.sweep_iter = []

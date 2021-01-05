@@ -711,16 +711,6 @@ def _x2c1e_xmatrix(t, v, w, s, c):
         x = cs.dot(cl.conj().T).dot(m)
     return x
 
-def _x2cmf_xmatrix(h, s, c):
-    nao = s.shape[0] // 2
-    n2 = nao * 2
-    m = s
-    e, a = scipy.linalg.eigh(h, m)
-    cl = a[:nao,nao:]
-    cs = a[nao:,nao:]
-    x = numpy.linalg.solve(cl.T, cs.T).T  # B = XA
-    return x
-
 def _x2c1e_get_hcore(t, v, w, s, c):
     nao = s.shape[0]
     n2 = nao * 2
