@@ -1,15 +1,15 @@
 import time
+import os.path
 from functools import reduce
 
 import numpy
 import scipy.linalg
 
-from pyscf import gto, lib
+from pyscf import gto, scf, lib
 from pyscf.lib.parameters import LIGHT_SPEED
-from pyscf.lib import logger
+from pyscf.lib import logger, chkfile
 from pyscf.shciscf import shci
 from pyscf.x2c import x2c
-from pyscf.lib import logger
 
 alpha = 1./LIGHT_SPEED
 c = LIGHT_SPEED
@@ -39,9 +39,15 @@ def _x2cmf_xmatrix(h, m, c):
     
 def get_socamf(atoms, basis):
     hso1e_atoms = {}
-    factor = -alpha**2 * 0.25
+
+    if os.path.isfile('amf.chk'):
+        for atom in atoms:
+            mat1e = chkfile.load('amf.chk', atom)
+            assert(mat1e is not None), \
+            'chkfile to store amf integrals don\'t have the specified element, try delete amf.chk and rerun.'
+            hso1e_atoms[atom] = mat1e
+        return hso1e_atoms
     for atom in atoms:
-        from pyscf import gto
         atm_id=gto.elements.charge(atom)
         spin=atm_id%2
         mol_atom = gto.M(atom=[[atom,[0,0,0]]], basis=basis, spin=spin)
@@ -91,6 +97,7 @@ def get_socamf(atoms, basis):
         g_ss = veff_sd[n2c:, n2c:]
         g_so_mf = reduce(numpy.dot, (r.T.conj(), (g_ll+reduce(numpy.dot, (g_ls, x)) + reduce(numpy.dot, (x.T.conj(), g_sl))+reduce(numpy.dot, (x.T.conj(), g_ss, x))),r))
         hso1e_atoms[atom]=g_so_mf
+        chkfile.dump('amf.chk', atom, g_so_mf)
     return hso1e_atoms
 
 def print1Int(h1, name):
