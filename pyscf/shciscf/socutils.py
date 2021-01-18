@@ -4,7 +4,7 @@ from functools import reduce
 
 import numpy
 import scipy.linalg
-
+import re
 from pyscf import gto, scf, lib
 from pyscf.lib.parameters import LIGHT_SPEED
 from pyscf.lib import logger, chkfile
@@ -14,6 +14,50 @@ from pyscf.x2c import x2c
 alpha = 1./LIGHT_SPEED
 c = LIGHT_SPEED
 LINEAR_DEP_THRESHOLD = 1e-9
+
+'''
+read in a molpro format soecp string, convert to nwchem format
+'''
+def to_nwchem(string):
+    nwchem_txt = ''
+    molpro_txt = []
+    for dat in string.splitlines():
+        x = dat.strip('; ')
+        #print(x)
+        if (x and not x.startswith('!')):
+            molpro_txt.append(re.split(',|;', x))
+
+    symb = molpro_txt[0][1]
+    nelec = int(molpro_txt[0][2])
+    nshell = int(molpro_txt[0][3])    
+    nso = int(molpro_txt[0][4])
+    assert len(molpro_txt) == (nshell + nso + 2), "ecp info doesn't match with data"
+    assert nshell - 1 == nso
+    ul = molpro_txt[1]
+    s = molpro_txt[2]
+    sf = molpro_txt[3:2+nshell]
+    so = molpro_txt[2+nshell:]
+    # header
+    nwchem_txt += (symb + ' nelec ' + str(nelec) + '\n')
+    # ul
+    nwchem_txt += (symb + ' ul\n')
+    for i in range(int(ul[0])):
+        nwchem_txt += (ul[i*3+1]+'\t'+ul[i*3+2]+'\t'+ul[i*3+3]+'\n')
+
+    # s
+    nwchem_txt += (symb + ' S\n')
+    for i in range(int(s[0])):
+        nwchem_txt += (s[i*3+1]+'\t'+s[i*3+2]+'\t'+s[i*3+3]+'\n')
+    # other shells
+    shell_name = ['P\n', 'D\n', 'F\n', 'G\n', 'H\n'] #this should be enough
+    for ishell in range(nso):
+        nwchem_txt += (symb + ' ' + shell_name[ishell])
+        for ifunc in range(int(sf[ishell][0])):
+            nwchem_txt += sf[ishell][ifunc*3+1]+'\t'
+            nwchem_txt += sf[ishell][ifunc*3+2]+'\t'
+            nwchem_txt += sf[ishell][ifunc*3+3]+'\t'
+            nwchem_txt += so[ishell][ifunc*3+3]+'\n'
+    return nwchem_txt
 
 def _x2cmf_xmatrix(h, m, c):
     n2 = m.shape[0]
