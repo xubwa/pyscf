@@ -4,7 +4,8 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.mcscf import mc_ao2mo
 from pyscf.ao2mo import _ao2mo
-from pyscf.ao2mo import outcore, r_outcore
+from pyscf.ao2mo import outcore
+from . import r_outcore
 from pyscf import ao2mo
 
 
@@ -13,7 +14,7 @@ from pyscf import ao2mo
 # level = 1: aaaa
 # level = 2: paaa
 class _ERIS(object):
-    def __init__(self, zcasscf, mo, method='incore', level=1):
+    def __init__(self, zcasscf, mo, method='outcore', level=1):
         mol = zcasscf.mol
         nao, nmo = mo.shape
         ncore = zcasscf.ncore
@@ -25,9 +26,9 @@ class _ERIS(object):
         mem_now = lib.current_memory()[0]
         eri = zcasscf._scf._eri
         moc, moa, moo = mo[:,:ncore], mo[:,ncore:nocc], mo[:,:nocc]
-        if (method == 'incore' and eri is not None and
-            (mem_incore+mem_now < zcasscf.max_memory*.9) or
-            mol.incore_anyway):
+        if (method == 'incore' or mol.incore_anyway):
+            raise NotImplementedError
+            '''
             if eri is None:
                 eri = mol.intor('int2e_spinor', aosym='s8')
 
@@ -43,6 +44,7 @@ class _ERIS(object):
                                          intor="int2e_spinor")
                 self.paaa = ao2mo.kernel(eri, (mo, moa, moa, moa), 
                                          intor="int2e_spinor")
+            '''
 
         else:
             import gc
@@ -54,10 +56,15 @@ class _ERIS(object):
                 log.warn('Calculation needs %d MB memory, over CASSCF.max_memory (%d MB) limit',
                          (mem_basic+mem_now)/.9, zcasscf.max_memory)
             if level == 1:
-                self.aaaa = ao2mo.kernel(mol, moa, intor="int2e_spinor")
+                r_outcore.general(mol, (moa, moa, moa, moa), 
+                                  self.feri, dataname='aaaa', 
+                                  intor="int2e_sph")
+                self.aaaa = self.feri['aaaa'][:,:].reshape((ncas, ncas, ncas, ncas))
             else:   
-                self.paaa = ao2mo.kernel(mol, (mo, moa, moa, moa), 
-                                         intor="int2e_spinor")
+                r_outcore.general(mol, (mo, moa, moa, moa),               
+                                  self.feri, dataname='paaa',
+                                  intor="int2e_sph")
+                self.paaa = self.feri['paaa'][:,:].reshape((nmo, ncas, ncas, ncas))
 
                     
         if (level == 1):
