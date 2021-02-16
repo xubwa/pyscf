@@ -325,12 +325,14 @@ class SHCI(pyscf.lib.StreamObject):
             nelectrons = nelec
         else:
             nelectrons = nelec[0] + nelec[1]
-        f = open("%s/Dice_%d_%d.rdm2"%(self.scratchDirectory, state, state), "rb")
-        import os
-        f.seek(4, os.SEEK_SET)
-        twopdm = numpy.fromfile(f, dtype=complex)
-        #twopdm = numpy.reshape(twopdm,  (norb, norb, norb, norb))
-        twopdm = numpy.reshape(twopdm,  (norb, norb, norb, norb), order='F')
+        twopdm = numpy.zeros((norb, norb, norb, norb), dtype=complex)
+        for i in range(self.nroots):
+            f = open("%s/Dice_%d_%d.rdm2"%(self.scratchDirectory, i, i), "rb")
+            f.seek(4, os.SEEK_SET)
+            tmppdm = numpy.fromfile(f, dtype=complex)
+            #twopdm = numpy.reshape(twopdm,  (norb, norb, norb, norb))
+            twopdm += numpy.reshape(tmppdm,  (norb, norb, norb, norb), order='F')
+        twopdm /= self.nroots 
         onepdm = numpy.einsum('ijkj->ik', twopdm)/(nelectrons-1)
         return onepdm, twopdm 
 
@@ -1323,7 +1325,7 @@ def readEnergy(SHCI):
     if SHCI.nroots == 1:
         return calc_e[0]
     else:
-        return list(calc_e)
+        return numpy.array(calc_e)
 
 
 def SHCISCF(mf, norb, nelec, maxM=1000, tol=1.e-8, *args, **kwargs):

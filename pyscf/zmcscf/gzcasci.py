@@ -516,7 +516,11 @@ def kernel(casci, mo_coeff=None, ci0=None, verbose=logger.NOTE):
                                            ecore=energy_core)
 
     t1 = log.timer('FCI solver', *t1)
-    e_cas = e_tot - energy_core
+    e_cas = e_tot - energy_core.real
+    print(e_tot)
+    if not isinstance(e_cas, (float, numpy.number)):
+        e_cas = e_cas.mean()
+        e_tot = e_tot.mean()
     return e_tot, e_cas, fcivec
 
 
@@ -872,23 +876,12 @@ To enable the solvent model for CASCI, the following code needs to be called
 
     def _finalize(self):
         log = logger.Logger(self.stdout, self.verbose)
-        if log.verbose >= logger.NOTE and getattr(self.fcisolver, 'spin_square', None):
-            if isinstance(self.e_cas, (float, numpy.number)):
-                ss = self.fcisolver.spin_square(self.ci, self.ncas, self.nelecas)
-                log.note('CASCI E = %.15g  E(CI) = %.15g  S^2 = %.7f',
-                         self.e_tot, self.e_cas, ss[0])
-            else:
-                for i, e in enumerate(self.e_cas):
-                    ss = self.fcisolver.spin_square(self.ci[i], self.ncas, self.nelecas)
-                    log.note('CASCI state %d  E = %.15g  E(CI) = %.15g  S^2 = %.7f',
-                             i, self.e_tot[i], e, ss[0])
+        if isinstance(self.e_cas, (float, numpy.number)):
+            log.note('CASCI E = %.15g  E(CI) = %.15g', self.e_tot, self.e_cas)
         else:
-            if isinstance(self.e_cas, (float, numpy.number)):
-                log.note('CASCI E = %.15g  E(CI) = %.15g', self.e_tot, self.e_cas)
-            else:
-                for i, e in enumerate(self.e_cas):
-                    log.note('CASCI state %d  E = %.15g  E(CI) = %.15g',
-                             i, self.e_tot[i], e)
+            for i, e in enumerate(self.e_cas):
+                log.note('CASCI state %d  E = %.15g  E(CI) = %.15g',
+                         i, self.e_tot[i], e)
         return self
 
     as_scanner = as_scanner

@@ -183,9 +183,8 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
     nocc = ncore + ncas
 
     eris = None
-    
     e_tot, e_cas, fcivec = casscf.casci(mo, ci0, eris, log, locals())
-
+    log.timer('CASCI finished')
     if ncas == nmo and not casscf.internal_rotation:
         if casscf.canonicalization:
             log.debug('CASSCF canonicalization')
@@ -211,11 +210,10 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
     while not conv and imacro < casscf.max_cycle_macro:
         imacro += 1
         njk = 0
-        t3m = t2m
         casdm1_old = casdm1
         casdm1, casdm2 = casscf.fcisolver.make_rdm12Frombin(fcivec, ncas, casscf.nelecas)
         norm_ddm = numpy.linalg.norm(casdm1 - casdm1_old)
-        t3m = log.timer('update CAS DM', *t3m)
+        t3m = log.timer('update CAS DM', *t2m)
 
         max_cycle_micro = casscf.micro_cycle_scheduler(locals())
         #max_stepsize = casscf.max_stepsize_scheduler(locals())
@@ -226,9 +224,10 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
         norm_gorb = numpy.linalg.norm(gorb)
         totinner += njk
 
+        t2m = t1m = log.timer('macro iter %d'%imacro, *t1m)
+        t3m = t2m
         e_tot, e_cas, fcivec = casscf.casci(mo, fcivec, eris, log, locals())
         log.timer('CASCI solver', *t3m)
-        t2m = t1m = log.timer('macro iter %d'%imacro, *t1m)
 
         de, elast = e_tot - elast, e_tot
         if (abs(de) < tol and
@@ -361,7 +360,7 @@ class ZCASSCF(gzcasci.GZCASCI):
     def __init__(self, mf_or_mol, ncas, nelecas, auxbasis = 'weigend+etb', ncore=None, frozen=None):
         gzcasci.GZCASCI.__init__(self, mf_or_mol, ncas, nelecas, ncore)
         self.frozen = frozen
-
+        self.hcore = self._scf.get_hcore()
         self.callback = None
         self.chkfile = self._scf.chkfile
 
@@ -504,22 +503,12 @@ To enable the solvent model for CASSCF, the following code needs to be called
         if envs is not None and log.verbose >= logger.INFO:
             log.debug('CAS space CI energy = %.15g', e_cas)
 
-            if getattr(self.fcisolver, 'spin_square', None):
-                ss = self.fcisolver.spin_square(fcivec, self.ncas, self.nelecas)
-            else:
-                ss = None
 
             if 'imicro' in envs:  # Within CASSCF iteration
-                if ss is None:
-                    log.info('macro iter %d (%d JK  %d micro), '
-                             'CASSCF E = %.15g  dE = %.8g',
-                             envs['imacro'], envs['njk'], envs['imicro'],
-                             e_tot, e_tot-envs['elast'])
-                else:
-                    log.info('macro iter %d (%d JK  %d micro), '
-                             'CASSCF E = %.15g  dE = %.8g  S^2 = %.7f',
-                             envs['imacro'], envs['njk'], envs['imicro'],
-                             e_tot, e_tot-envs['elast'], ss[0])
+                log.info('macro iter %d (%d JK  %d micro), '
+                         'CASSCF E = %.15g  dE = %.8g',
+                          envs['imacro'], envs['njk'], envs['imicro'],
+                          e_tot, e_tot-envs['elast'])
                 if 'norm_gci' in envs:
                     log.info('               |grad[o]|=%5.3g  '
                              '|grad[c]|= %s  |ddm|=%5.3g',
@@ -529,10 +518,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
                     log.info('               |grad[o]|=%5.3g  |ddm|=%5.3g',
                              envs['norm_gorb0'], envs['norm_ddm'])
             else:  # Initialization step
-                if ss is None:
-                    log.info('CASCI E = %.15g', e_tot)
-                else:
-                    log.info('CASCI E = %.15g  S^2 = %.7f', e_tot, ss[0])
+                log.info('CASCI E = %.15g', e_tot)
         return e_tot, e_cas, fcivec
 
     def dump_chk(self, envs):
@@ -573,7 +559,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
     #Fully uses AO and is currently not efficient because AO 
     #integrals are assumed to be available cheaply
     def calcGradAO(self, mo, casdm1, casdm2):
-        hcore = self._scf.get_hcore() 
+        hcore = self.hcore #self._scf.get_hcore() 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
 
@@ -622,7 +608,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
         start = time.clock(), time.time()
         cderi = self.cderi_scalar
 
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #self._scf.get_hcore()
 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
@@ -658,7 +644,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
     def calcGradDF(self, mo, casdm1, casdm2):
         start = time.clock(), time.time()
         #return self.calcGrad(mo, casdm1, casdm2)
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #_scf.get_hcore()
 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
@@ -693,7 +679,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
         return 2*Grad, E
 
     def calcEDF(self, mo, casdm1, casdm2):
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #_scf.get_hcore()
 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
@@ -749,9 +735,10 @@ To enable the solvent model for CASSCF, the following code needs to be called
         return E
     #@profile
     def calcGrad(self, mo, casdm1, casdm2, ERIS=None):
-        start = time.clock(), time.time()
+        t0 = time.clock(), time.time()
+        log = logger.Logger(self.stdout, verbose=self.verbose)
         if ERIS is None: ERIS = self.ao2mo(mo,level=2)
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #_scf.get_hcore()
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
 
@@ -761,28 +748,32 @@ To enable the solvent model for CASSCF, the following code needs to be called
         moc, moa = mo[:,:ncore], mo[:,ncore:nocc]
         dmcore = numpy.dot(moc, moc.T.conj())
         dmcas = reduce(numpy.dot, (moa.conj(), casdm1(), moa.T)).conj()
-        j,k = self._scf.get_jk(self.mol, dm=dmcore)        
-        ja,ka = self._scf.get_jk(self.mol, dm=dmcas)        
+        j,k = self._scf.get_jk(self.mol, dm=dmcore)
+        t0 = log.timer("core jk", *t0)     
+        ja,ka = self._scf.get_jk(self.mol, dm=dmcas)
+        t0 = log.timer("active jk", *t0)
 
         
         hcore = reduce(numpy.dot, (mo.conj().T, hcore , mo))
         #print (hcore.diagonal())
         Fc =  (hcore + reduce(numpy.dot, (mo.conj().T, (j-k), mo)))
         Grad[:,:ncore] = hcore[:,:ncore] + reduce(numpy.dot, (mo.conj().T, j + ja - k - ka, moc))
-        
+        t0=log.timer("some reducions", *t0)
         Grad[:,ncore:nocc] = lib.einsum('sp,qp->sq', Fc[:,ncore:nocc], casdm1())
         Grad[:,ncore:nocc]+= lib.einsum('ruvw,tvuw->rt', ERIS.paaa, casdm2())
+        t0 = log.timer("paaa transformation", *t0)
 
         Ecore = 0.5*numpy.sum((hcore+Fc).diagonal()[:ncore]) 
         Ecas1 = lib.einsum('tu, tu', Fc[ncore:nocc, ncore:nocc], casdm1())
         Ecas2 = 0.5*lib.einsum('tuvw, tvuw', ERIS.paaa[ncore:nocc], casdm2())
+        t0 = log.timer("reduce energy from dm", *t0)
         #print("time of calc grad:", time.clock()-start[0], time.time() - start[1])
         return 2*Grad, (Ecore+Ecas1+Ecas2+nuc_energy).real
     
 
     def calcGradOld(self, mo, casdm1, casdm2, ERIS=None):
         if ERIS is None: ERIS = self.ao2mo(mo,level=2)
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #_scf.get_hcore()
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
 
@@ -805,7 +796,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
 
     ###IT IS NOT CORRECT, maybe some day i will fix it###
     def calcH(self, mo, x, casdm1, casdm2, ERIS):
-        hcore = self._scf.get_hcore()
+        hcore = self.hcore #_scf.get_hcore()
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
 
@@ -909,10 +900,11 @@ To enable the solvent model for CASSCF, the following code needs to be called
         #the part of mo that is relevant 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
-
+        cput0 = t2m = t1m = (time.clock(), time.time())
         def NewtonStep(casscf, mo, nocc, Grad):
             G = casscf.pack_vars(Grad-Grad.conj().T)
             #Grad0_old, eold = casscf.calcGradDF(mo, casdm1, casdm2)
+            t0 = (time.clock(), time.time())
             Grad0, e = casscf.calcGradDFScalar(mo, casdm1, casdm2)
             #print(numpy.linalg.norm(Grad0), numpy.linalg.norm(Grad0_old), numpy.linalg.norm(Grad0-Grad0_old))
             #print(e-eold)
@@ -925,7 +917,9 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 Kappa = eps*x_unpack
                 
                 monew = numpy.dot(mo, expmat(Kappa))
+                t0 = (time.clock(), time.time())
                 Gradnewp, e = casscf.calcGradDFScalar(monew, casdm1, casdm2)
+                #t0 = log.timer_debug1('df approximated gradient', *t0)
                 #print (numpy.linalg.norm(Gradnewp-Grad))  
 
                 f = numpy.dot(Kappa.conj().T, Gradnewp)
@@ -948,8 +942,10 @@ To enable the solvent model for CASSCF, the following code needs to be called
         Enew = 0.
         #Eold = self.calcE(mo, casdm1, casdm2).real
         Grad, Eold = self.calcGrad(mo, casdm1, casdm2)
+        t2m = t1m = log.timer('exact gradient', *cput0)
         #Eolddf = self.calcEDF(mo, casdm1, casdm2).real
         Eolddf = self.calcEDF_scalar(mo, casdm1, casdm2).real
+        t2m = log.timer_debug1('energy approximated from dm integrals', *t2m)
         print("norm(g): %6.2g" % (numpy.linalg.norm(Grad-Grad.conj().T)))
         while True:
             tau = 1.0
@@ -962,16 +958,18 @@ To enable the solvent model for CASSCF, the following code needs to be called
 
             #find the newton step direction
             x, gnorm = NewtonStep(self, mo, nocc, Grad)
+            t1m = t2m = log.timer('one newton step costs', *t1m)
             T = self.unpack_vars(x)
  
             ###do line search along the AH direction
             while tau > 1e-2:
                 monew = numpy.dot(mo, expmat(tau*(T) ))
-                #Enewdf = self.calcEDF(monew, casdm1, casdm2).real
                 Enewdf = self.calcEDF_scalar(monew, casdm1, casdm2).real
+                t2m = log.timer('energy approximated with df', *t2m)
                 #print ("line search ", Enewdf, Eolddf)
                 if (Enewdf < Eolddf or tau/2 <= 1.e-3):# - tau * 1e-4*gnorm):
                     Grad, Enew = self.calcGrad(monew, casdm1, casdm2)
+                    t1m = t2m = log.timer('energy updated in micro iteration', *t1m)
                     print ("%d  %6.3e  %18.12g   %13.6e   g=%6.2e"\
                     %(imicro, tau, Enew, Enew-Eold, gnorm))
                     Eold = Enew
