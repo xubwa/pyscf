@@ -483,8 +483,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
     def ao2mo(self, mo_coeff=None, level=None):
         if mo_coeff is None: mo_coeff = self.mo_coeff
         if level is None: level=self.ao2mo_level      
-        return zmc_ao2mo._ERIS(self, mo_coeff, method='incore',
-                              level=level)
+        return zmc_ao2mo._ERIS(self, mo_coeff, level=level)
 
     def casci(self, mo_coeff, ci0=None, eris=None, verbose=None, envs=None):
         log = logger.new_logger(self, verbose)
