@@ -334,7 +334,7 @@ class SHCI(pyscf.lib.StreamObject):
             twopdm += numpy.reshape(tmppdm,  (norb, norb, norb, norb), order='F')
         twopdm /= self.nroots 
         onepdm = numpy.einsum('ijkj->ik', twopdm)/(nelectrons-1)
-        return onepdm, twopdm 
+        return onepdm, twopdm
 
     def make_rdm12(self, state, norb, nelec, link_index=None, **kwargs):
         nelectrons = 0

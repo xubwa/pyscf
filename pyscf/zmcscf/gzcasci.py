@@ -514,7 +514,9 @@ def kernel(casci, mo_coeff=None, ci0=None, verbose=logger.NOTE):
                                            ci0=ci0, verbose=log,
                                            max_memory=max_memory,
                                            ecore=energy_core)
-
+    if isinstance(e_tot, list):
+        e_tot = numpy.average(e_tot)
+    print(e_tot)
     t1 = log.timer('FCI solver', *t1)
     e_cas = e_tot - energy_core.real
     print(e_tot)
