@@ -288,7 +288,7 @@ def get_jk_df_scalar(mol, cderi, mo_coeff, dm=None, with_j=True, with_k=True):
         vkaa = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_alpha,       cderi_scalar_half_trans_alpha.transpose(0,2,1).conj())
         vkab = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_alpha,       cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
         vkba = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_alpha.transpose(0,2,1).conj())
-        vkbb = lib.einsum('pik,pkj小叔TV->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
+        vkbb = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
         vk = (sph2spinor(ca, vkaa) + sph2spinor(cb, vkbb) + reduce(numpy.dot, (ca.T.conj(), vkab, cb)) + reduce(numpy.dot, (cb.T.conj(), vkba, ca)) )
     return vj, vk
 
@@ -1196,7 +1196,6 @@ To enable the solvent model for CASSCF, the following code needs to be called
             while tau > 1e-2:
                 monew = numpy.dot(mo, expmat(tau*(T) ))
                 Enewdf = self.calcEDF_scalar(monew, casdm1, casdm2).real
-                t2m = log.timer('energy approximated with df', *t2m)
                 #print ("line search ", Enewdf, Eolddf)
                 if (Enewdf < Eolddf or tau/2 <= 1.e-3):# - tau * 1e-4*gnorm):
                     Grad, Enew, hdiag = self.calcGrad(monew, casdm1, casdm2)
