@@ -17,6 +17,7 @@
 #
 
 import copy, scipy, time, numpy
+import numpy as np
 from functools import reduce
 import pyscf.lib.logger as logger
 from pyscf.zmcscf import gzcasci, zmc_ao2mo
@@ -83,7 +84,133 @@ def GMRES(A, b, x, max_iter=20, conv=1.e-5):
     #print (norm(A(x)-b))
     return x, err
 
-   
+def compute_lambda_(mat1, mat2, x_):
+    nlast = mat1.shape[0]
+    assert(nlast > 1)
+    lambda_test = 1.0
+    lambda_lasttest = 0.0
+    stepsize_lasttest = 0.0
+    stepsize = 0.0
+    maxstepsize = 1.0
+    iok = 0
+    for i in range(10):
+        scr = mat1 + mat2 * (1.0/lambda_test)
+        e, c = np.linalg.eigh(scr)
+
+        ivec = -1
+        for j in range(nlast):
+            if abs(c[0,j]) <= 1.1 and abs(c[0,j]) > 0.1 :
+                ivec = j
+                break
+        if ivec < 0:
+            raise Exception('logical error in AugHess')
+        c[:,ivec] = c[:,ivec]/(c[0,ivec])
+        step = np.dot(x_[1:,:nlast], c[:nlast,ivec])
+        stepsize = np.linalg.norm(step[1:]) / abs(lambda_test)
+        #print(ivec, e, stepsize, lambda_test)
+
+        if i is 0:
+            if stepsize <= maxstepsize:
+                break
+            lambda_lasttest = lambda_test
+            lambda_test = stepsize / maxstepsize
+        else:
+            if abs(stepsize - maxstepsize)/maxstepsize < 0.01:
+                break
+            if (stepsize > maxstepsize):
+                lambda_lasttest = lambda_test
+                lambda_test = lambda_test * (stepsize / maxstepsize)
+            else:
+                if (iok > 2): 
+                    break
+                iok += 1
+                d1 = maxstepsize - stepsize
+                d2 = stepsize_lasttest - maxstepsize
+                if (d1 == 0.0 or d1 == -d2):
+                    break
+                lambda_lasttest_ = lambda_lasttest
+                lambda_lasttest = lambda_test
+                lambda_test = d1/(d1+d2) * lambda_lasttest_ + d2/(d1+d2)*lambda_test
+            if lambda_test < 1.0:
+                lambda_test = 1.0
+            stepsize_lasttest = stepsize
+    return lambda_test, stepsize
+    
+def davidson(hop, g, hdiag, tol=5e-6, neig=1, mmax=20):
+    # Setup the subspace trial vectors
+    print ('No. of start vectors:',1)
+    neig = neig
+    print ('No. of desired Eigenvalues:',neig)
+    n = g.shape[0]+1
+    x = np.zeros((n,mmax+1)) # holder for trial vectors as iterations progress
+    sigma = np.zeros((n, mmax+1))
+    ritz = np.zeros((n,n))
+    #-------------------------------------------------------------------------------
+    # Begin iterations  
+    #-------------------------------------------------------------------------------
+    #initial extra (1,0) vector
+    start = time.time()
+    x[0, 0] = 1.0
+    sigma[1:, 0] = g
+
+    # "first" guess vector
+    
+    for i in range(1, n):
+        if hdiag[i-1]+0.001 > 1.0e-8:
+            x[i, 1] = -g[i-1]/(hdiag[i-1]+0.001)
+        else:
+            x[i, 1] = -g[i-1] / (hdiag[i-1]+0.001-1.0e-8)
+    
+    x[:,1] = x[:,1]/np.linalg.norm(x[:,1])
+    for m in range(1, mmax+1):
+        sigma[1:,m] = hop(x[1:,m])
+        sigma[0, m] = np.dot(g, x[1:,m])
+        # Matrix-vector products, form the projected Hamiltonian in the subspace
+        T = np.linalg.multi_dot((x[:,:m+1].T, sigma[:,:m+1]))
+        #print(T)
+        mat1 = numpy.zeros((m+1, m+1))
+        mat2 = numpy.zeros((m+1, m+1))
+        mat2[1:,1:] = T[1:,1:]
+        mat1 = T - mat2
+        lambda_, stepsize = compute_lambda_(mat1, mat2, x)
+        T = mat1 + mat2*(1.0/lambda_)
+        e, vects = np.linalg.eigh(T[:m+1,:m+1])
+        for j in range(m+1):
+            if abs(vects[0, j]) <= 1.1 and abs(vects[0, j]) > 0.1 :
+                ivec = j
+                break
+        if ivec < 0:
+            raise Exception('logical error in AugHess')
+        elif ivec > 0:
+            print('... the vector found in AugHess was not the lowest eigenvector ...')
+
+        ritz[1:,0] = np.dot(sigma[1:,:m+1]-lambda_*e[ivec]*x[1:,:m+1], vects[:,ivec])
+        err = np.linalg.norm(ritz[:,0])
+        print('iter %d, ivec %d, c[ivec], %6.2f, eps=%6.2e, res=%6.2e,  lambda=%6.2f, step=%6.2f' %(m, ivec, vects[0, ivec], e[ivec], err, lambda_, stepsize))
+        if err < max(0.001*stepsize, tol) and m>4:
+            print('Davidson converged at iteration no.:',m-1)
+            end = time.time()
+            print ('Davidson time:',end-start)
+            x_ = np.dot(x[:,:m+1], vects[:, ivec])
+            return x_[1:]/x_[0], e[ivec]
+        elif m is mmax:
+            print('Max iteration reached')
+            x_ = np.dot(x[:,:m+1], vects[:, ivec])
+            return x_[1:]/x_[0], e[ivec]
+        else:
+            for idx in range(hdiag.shape[0]):
+                denom = hdiag[idx]-e[ivec]*lambda_
+                if abs(denom)>1e-8:
+                    ritz[idx+1,0] = -ritz[idx+1, 0]/denom
+                else:
+                    ritz[idx+1,0] = -ritz[idx+1, 0]/1e-8
+            # orthonormalize ritz vector
+            for idx in range(m+1):
+                ritz[:,0] = ritz[:,0]-(np.dot(x[:,idx],ritz[:,0])*x[:,idx])#/np.linalg.norm(x[:,idx])
+            ritz[:,0] = ritz[:,0]/(np.linalg.norm(ritz[:,0]))
+            x[:,m+1] = ritz[:,0]
+            
+
 def conjugateGradient(A, b, x, max_iter=10, conv=1.e-4):
     r = b - A(x)
     p = 1*r
@@ -161,7 +288,7 @@ def get_jk_df_scalar(mol, cderi, mo_coeff, dm=None, with_j=True, with_k=True):
         vkaa = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_alpha,       cderi_scalar_half_trans_alpha.transpose(0,2,1).conj())
         vkab = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_alpha,       cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
         vkba = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_alpha.transpose(0,2,1).conj())
-        vkbb = lib.einsum('pik,pkj->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
+        vkbb = lib.einsum('pik,pkj小叔TV->ij', cderi_scalar_half_trans_beta,        cderi_scalar_half_trans_beta.transpose(0,2,1).conj())
         vk = (sph2spinor(ca, vkaa) + sph2spinor(cb, vkbb) + reduce(numpy.dot, (ca.T.conj(), vkab, cb)) + reduce(numpy.dot, (cb.T.conj(), vkba, ca)) )
     return vj, vk
 
@@ -218,10 +345,10 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
         max_cycle_micro = casscf.micro_cycle_scheduler(locals())
         #max_stepsize = casscf.max_stepsize_scheduler(locals())
  
-        print("macro iter %d, E=%16.12g " %(imacro, e_tot), end='')
+        print("macro iter %d, E=%16.12g, |ddm|=%8.6g " %(imacro, e_tot, norm_ddm), end='')
         mo, gorb, njk, norm_gorb0 = casscf.optimizeOrbs(mo, lambda:casdm1, lambda:casdm2, imacro <= 2, 
                                         eris, r0, conv_tol_grad*0.3, log)
-        norm_gorb = numpy.linalg.norm(gorb)
+        norm_gorb = norm_gorb0#numpy.linalg.norm(gorb)
         totinner += njk
 
         t2m = t1m = log.timer('macro iter %d'%imacro, *t1m)
@@ -348,7 +475,7 @@ class ZCASSCF(gzcasci.GZCASCI):
     ah_start_tol = getattr(__config__, 'mcscf_mc1step_CASSCF_ah_start_tol', 2.5)
     ah_start_cycle = getattr(__config__, 'mcscf_mc1step_CASSCF_ah_start_cycle', 3)
     ah_grad_trust_region = getattr(__config__, 'mcscf_mc1step_CASSCF_ah_grad_trust_region', 3.0)
-    internal_rotation = getattr(__config__, 'zmcscf_zmc2step_ZCASSCF_internal_rotation', True)
+    internal_rotation = getattr(__config__, 'zmcscf_zmc2step_ZCASSCF_internal_rotation', False)
     kf_interval = getattr(__config__, 'mcscf_mc1step_CASSCF_kf_interval', 4)
     kf_trust_region = getattr(__config__, 'mcscf_mc1step_CASSCF_kf_trust_region', 3.0)
 
@@ -756,18 +883,49 @@ To enable the solvent model for CASSCF, the following code needs to be called
         hcore = reduce(numpy.dot, (mo.conj().T, hcore , mo))
         #print (hcore.diagonal())
         Fc =  (hcore + reduce(numpy.dot, (mo.conj().T, (j-k), mo)))
-        Grad[:,:ncore] = hcore[:,:ncore] + reduce(numpy.dot, (mo.conj().T, j + ja - k - ka, moc))
-        t0=log.timer("some reducions", *t0)
+        Fa =  reduce(numpy.dot, (mo.conj().T, (ja-ka), mo))
+        #Grad[:,:ncore] = hcore[:,:ncore] + reduce(numpy.dot, (mo.conj().T, j + ja - k - ka, moc))
+        Grad[:,:ncore] = (Fc+Fa)[:,:ncore]
+        
         Grad[:,ncore:nocc] = lib.einsum('sp,qp->sq', Fc[:,ncore:nocc], casdm1())
         Grad[:,ncore:nocc]+= lib.einsum('ruvw,tvuw->rt', ERIS.paaa, casdm2())
         t0 = log.timer("paaa transformation", *t0)
 
+
+        # now computes approximate hessian diagonal
+        hdiag = numpy.zeros_like(Grad)
+        F = Fc - Fa
+        #print(F.diagonal())
+        for i in range(ncore):
+            for a in range(nocc, nmo):
+                hia = 2.*(F[a,a]-F[i,i])
+                hdiag[i,a] = hia
+                hdiag[a,i] = hia
+        hdiag_ta = lib.einsum('tt,aa->ta', casdm1(), F[nocc:, nocc:])
+        tdm = lib.einsum("tuvw,tuvw->t", ERIS.aaaa, casdm2()) \
+            + lib.einsum('tu,tu->t', Fc[ncore:nocc, ncore:nocc], casdm1())
+        #print(tdm)
+        #print("hdiag_ta")
+        #print(hdiag_ta)
+        for a in range(hdiag_ta.shape[1]):
+            hdiag_ta[:, a] -= 2.*tdm
+        hdiag[ncore:nocc, nocc:] = hdiag_ta
+        hdiag[nocc:, ncore:nocc] = hdiag_ta.T
+
+        hdiag_it = lib.einsum('tt,ii->ti', casdm1(), F[:ncore,:ncore])
+        #print("hdiag_it")
+        #print(hdiag_it)
+        for i in range(ncore):
+            for t in range(ncore,nocc):
+                hdiag_it[t-ncore,i] += ((F[t,t]-F[i,i]) - 2.*tdm[t-ncore])
+        hdiag[:ncore,ncore:nocc] = hdiag_it.T
+        hdiag[ncore:nocc,:ncore] = hdiag_it
         Ecore = 0.5*numpy.sum((hcore+Fc).diagonal()[:ncore]) 
         Ecas1 = lib.einsum('tu, tu', Fc[ncore:nocc, ncore:nocc], casdm1())
         Ecas2 = 0.5*lib.einsum('tuvw, tvuw', ERIS.paaa[ncore:nocc], casdm2())
         t0 = log.timer("reduce energy from dm", *t0)
         #print("time of calc grad:", time.clock()-start[0], time.time() - start[1])
-        return 2*Grad, (Ecore+Ecas1+Ecas2+nuc_energy).real
+        return 2*Grad, (Ecore+Ecas1+Ecas2+nuc_energy).real, hdiag.real
     
 
     def calcGradOld(self, mo, casdm1, casdm2, ERIS=None):
@@ -899,8 +1057,8 @@ To enable the solvent model for CASSCF, the following code needs to be called
         #the part of mo that is relevant 
         nmo, ncore, nact = mo.shape[0], self.ncore, self.ncas
         nocc = ncore+nact
-        cput0 = t2m = t1m = (time.clock(), time.time())
-        def NewtonStep(casscf, mo, nocc, Grad):
+
+        def NewtonStep(casscf, mo, nocc, Grad, hdiag):
             G = casscf.pack_vars(Grad-Grad.conj().T)
             #Grad0_old, eold = casscf.calcGradDF(mo, casdm1, casdm2)
             t0 = (time.clock(), time.time())
@@ -908,7 +1066,10 @@ To enable the solvent model for CASSCF, the following code needs to be called
             #print(numpy.linalg.norm(Grad0), numpy.linalg.norm(Grad0_old), numpy.linalg.norm(Grad0-Grad0_old))
             #print(e-eold)
             G0 = casscf.pack_vars(Grad0-Grad0.conj().T)
-            
+            hdiag = casscf.pack_vars(hdiag)
+            nvars = hdiag.shape[0]
+            hdiag[nvars//2:] = hdiag[:nvars//2]
+
             def hop(x):
                 Gradnewp = 0.*mo
                 x_unpack = casscf.unpack_vars(x)
@@ -916,9 +1077,78 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 Kappa = eps*x_unpack
                 
                 monew = numpy.dot(mo, expmat(Kappa))
-                t0 = (time.clock(), time.time())
-                Gradnewp, e = casscf.calcGradDFScalar(monew, casdm1, casdm2)
-                #t0 = log.timer_debug1('df approximated gradient', *t0)
+                Gradnewp = casscf.calcGradDFScalar(monew, casdm1, casdm2)[0]
+                #print (numpy.linalg.norm(Gradnewp-Grad))  
+
+                f = numpy.dot(Kappa.conj().T, Gradnewp)
+                h = numpy.dot(Gradnewp, Kappa.conj().T)
+                Gradnewp = Gradnewp - 0.5*(f-h) #- Gtemp.conj().T - 0.5*(f-f.conj().T+h-h.conj().T)
+                Gradnewp = Gradnewp - Gradnewp.conj().T
+                Gnewp= casscf.pack_vars(Gradnewp)
+                
+                # second point for two point finite difference.
+                Gradnewq = 0.*mo
+                eps = -1.e-5
+                Kappa = eps*x_unpack
+                
+                monew = numpy.dot(mo, expmat(Kappa))
+                Gradnewq = casscf.calcGradDFScalar(monew, casdm1, casdm2)[0]
+                #print (numpy.linalg.norm(Gradnewp-Grad))  
+
+                f = numpy.dot(Kappa.conj().T, Gradnewq)
+                h = numpy.dot(Gradnewq, Kappa.conj().T)
+                Gradnewq = Gradnewq - 0.5*(f-h) #- Gtemp.conj().T - 0.5*(f-f.conj().T+h-h.conj().T)
+                Gradnewq = Gradnewq - Gradnewq.conj().T
+                Gnewq= casscf.pack_vars(Gradnewq)
+
+                Hx = (Gnewp - G0)/eps
+                #Hx2 = (Gnewp-Gnewq) / (2.0*eps)
+                #print(Hx-Hx2)
+
+                #print ("hop")
+                return -Hx
+
+            x0 = 1.*G
+            #x, err = GMRES(hop, -G, x0)
+            #return x, err
+            nvars = hdiag.shape[0]//2
+            #compute hessian diagonal
+            '''
+            hdiag_exact = numpy.zeros((nvars*2))
+            for i in range(nvars):
+                x = numpy.zeros((nvars*2))
+                x[i] = 1.0
+                hdiag_exact[i] = hop(x)[i]
+            hdiag_exact_pack = casscf.unpack_vars(hdiag_exact)
+            hdiag_pack = casscf.unpack_vars(hdiag)
+            idx = casscf.uniq_var_indices(nmo, casscf.ncore, casscf.ncas, casscf.frozen)
+            hdiag[:nvars] = hdiag_exact[:nvars]
+            hdiag[nvars:] = hdiag_exact[:nvars]
+            
+            #print(hdiag[:nvars])
+            #print(hdiag_exact[:nvars])
+            #print((hdiag/4.-hdiag_exact)[:10])
+            '''
+            h_fd = np.zeros((nvars*2, nvars*2))
+            for i in range(nvars*2):
+                x = numpy.zeros((nvars*2))
+                x[i] = 1.0
+                #h_fd[i] = hop(x)
+            def hop_fd(x):
+                return np.dot(h_fd, x)
+            #print(numpy.linalg.eigh(h_fd)[0])            
+            x, err = davidson(hop, G0, hdiag)
+            return x, err
+            '''
+            def hop(xin):
+                x = xin[1:]
+                Gradnewp = 0.*mo
+                x_unpack = casscf.unpack_vars(x)
+                eps = 1.e-5
+                Kappa = eps*x_unpack
+                
+                monew = numpy.dot(mo, expmat(Kappa))
+                Gradnewp = casscf.calcGradDFScalar(monew, casdm1, casdm2)[0]
                 #print (numpy.linalg.norm(Gradnewp-Grad))  
 
                 f = numpy.dot(Kappa.conj().T, Gradnewp)
@@ -930,36 +1160,38 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 
                 Hx = (Gnewp - G0)/eps
                 #print ("hop")
-                return Hx
+                
+                gx = numpy.dot(G0, x)
 
-            x0 = 0.*G
-            x, norm = GMRES(hop, -G, x0)
-            #x, stat = scipy.sparse.linalg.gmres(hop, -G, x0,maxiter = 10)
-            return x, norm
+                return numpy.hstack((gx, Hx))
+            
+            uniq_vars = G0.shape[0]
+            Hx = LinearOperator(shape=(1+uniq_vars, 1+uniq_vars), matvec=hop)
+            eps, x = scipy.sparse.linalg.eigsh(Hx, k=1, which='SM', tol=1e-2)
+            print(eps)
+            print(x[0])
+            return x[1:,0]/x[0], eps
+            '''
 
-        imicro, nmicro, T, Grad = 0, 5, numpy.zeros_like(mo), 0.*mo
+        imicro, nmicro, T, Grad = 0, 1, numpy.zeros_like(mo), 0.*mo
         Enew = 0.
         #Eold = self.calcE(mo, casdm1, casdm2).real
-        Grad, Eold = self.calcGrad(mo, casdm1, casdm2)
-        t2m = t1m = log.timer('exact gradient', *cput0)
+        Grad, Eold, hdiag = self.calcGrad(mo, casdm1, casdm2)
         #Eolddf = self.calcEDF(mo, casdm1, casdm2).real
+        G = self.pack_vars(Grad-Grad.T.conj())
+        gnorm = numpy.linalg.norm(G)
+        print("norm(g): %10.6g" % (gnorm))
         Eolddf = self.calcEDF_scalar(mo, casdm1, casdm2).real
-        t2m = log.timer_debug1('energy approximated from dm integrals', *t2m)
-        print("norm(g): %6.2g" % (numpy.linalg.norm(Grad-Grad.conj().T)))
         while True:
             tau = 1.0
-            gnorm = numpy.linalg.norm(Grad-Grad.conj().T)
-
             #if gradient is converged then exit
             if ( gnorm < conv_tol or imicro >= nmicro or tau <= 1.e-2):      
                 return mo, Grad-Grad.conj().T, imicro, gnorm
                 
 
             #find the newton step direction
-            x, gnorm = NewtonStep(self, mo, nocc, Grad)
-            t1m = t2m = log.timer('one newton step costs', *t1m)
+            x, eps = NewtonStep(self, mo, nocc, Grad, hdiag)
             T = self.unpack_vars(x)
- 
             ###do line search along the AH direction
             while tau > 1e-2:
                 monew = numpy.dot(mo, expmat(tau*(T) ))
@@ -967,8 +1199,7 @@ To enable the solvent model for CASSCF, the following code needs to be called
                 t2m = log.timer('energy approximated with df', *t2m)
                 #print ("line search ", Enewdf, Eolddf)
                 if (Enewdf < Eolddf or tau/2 <= 1.e-3):# - tau * 1e-4*gnorm):
-                    Grad, Enew = self.calcGrad(monew, casdm1, casdm2)
-                    t1m = t2m = log.timer('energy updated in micro iteration', *t1m)
+                    Grad, Enew, hdiag = self.calcGrad(monew, casdm1, casdm2)
                     print ("%d  %6.3e  %18.12g   %13.6e   g=%6.2e"\
                     %(imicro, tau, Enew, Enew-Eold, gnorm))
                     Eold = Enew
