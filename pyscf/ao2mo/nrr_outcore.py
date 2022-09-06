@@ -37,8 +37,15 @@ IOBUF_WORDS = getattr(__config__, 'ao2mo_outcore_iobuf_words', 1e8)  # 1.6 GB
 IOBUF_ROW_MIN = getattr(__config__, 'ao2mo_outcore_row_min', 160)
 MAX_MEMORY = getattr(__config__, 'ao2mo_outcore_max_memory', 4000)  # 4GB
 
+def full(mol, mo_coeff, erifile, dataname='eri_mo',
+         intor='int2e_spinor', motype='ghf', aosym='s4', comp=None,
+         max_memory=MAX_MEMORY, ioblk_size=IOBLK_SIZE, verbose=logger.WARN):
+    general(mol, (mo_coeff,)*4, erifile, dataname,
+            intor, aosym, motype, comp, max_memory, ioblk_size, verbose)
+    return erifile
+
 def general(mol, mo_coeffs, erifile, dataname='eri_mo',
-            intor='int2e_sph', aosym='s1', comp=None,
+            intor='int2e_sph', motype='ghf', aosym='s1', comp=None,
             max_memory=MAX_MEMORY, ioblk_size=IOBLK_SIZE, verbose=logger.debug):
     time_0pass = (logger.process_clock(), logger.perf_counter())
     log = logger.new_logger(mol, verbose)
@@ -51,9 +58,16 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
     nmol = mo_coeffs[3].shape[1]
     nao = mo_coeffs[0].shape[0]//2
 
-    ca, cb = mol.sph2spinor_coeff()
-    mo_alph = [numpy.dot(ca, moi) for moi in mo_coeffs]
-    mo_beta = [numpy.dot(cb, moi) for moi in mo_coeffs]
+    if motype == 'j-spinor':
+        ca, cb = mol.sph2spinor_coeff()
+        mo_alph = [numpy.dot(ca, moi) for moi in mo_coeffs]
+        mo_beta = [numpy.dot(cb, moi) for moi in mo_coeffs]
+    elif motype == 'ghf':
+        mo_alph = [moi[::2,:] for moi in mo_coeffs]
+        mo_beta = [moi[1::2,:] for moi in mo_coeffs]
+    else:
+        raise AssertionError('Unknown motype %s' % motype, " should be one of 'j-spinor' and 'ghf'.")
+
     aosym = outcore._stand_sym_code(aosym)
     if aosym in ('s1', 's2ij', 'a2ij'):
         nao_pair = nao * nao
