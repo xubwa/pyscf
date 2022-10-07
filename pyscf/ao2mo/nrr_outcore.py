@@ -38,7 +38,7 @@ IOBUF_ROW_MIN = getattr(__config__, 'ao2mo_outcore_row_min', 160)
 MAX_MEMORY = getattr(__config__, 'ao2mo_outcore_max_memory', 4000)  # 4GB
 
 def full(mol, mo_coeff, erifile, dataname='eri_mo',
-         intor='int2e_spinor', motype='ghf', aosym='s4', comp=None,
+         intor='int2e_sph', motype='ghf', aosym='s1', comp=None,
          max_memory=MAX_MEMORY, ioblk_size=IOBLK_SIZE, verbose=logger.WARN):
     general(mol, (mo_coeff,)*4, erifile, dataname,
             intor, aosym, motype, comp, max_memory, ioblk_size, verbose)
@@ -63,8 +63,9 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
         mo_alph = [numpy.dot(ca, moi) for moi in mo_coeffs]
         mo_beta = [numpy.dot(cb, moi) for moi in mo_coeffs]
     elif motype == 'ghf':
-        mo_alph = [moi[::2,:] for moi in mo_coeffs]
-        mo_beta = [moi[1::2,:] for moi in mo_coeffs]
+        nao = mo_coeffs[0].shape[0] // 2
+        mo_alph = [moi[:nao,:] for moi in mo_coeffs]
+        mo_beta = [moi[nao:,:] for moi in mo_coeffs]
     else:
         raise AssertionError('Unknown motype %s' % motype, " should be one of 'j-spinor' and 'ghf'.")
 
@@ -182,6 +183,25 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
     log.timer('AO->MO transformation for %s '%intor, *time_0pass)
     return erifile
 
+def full_iofree(mol, mo_coeff, dataname='eri_mo', intor='int2e_sph',
+                motype='ghf', aosym='s1', comp=None, verbose=logger.debug,
+                **kwargs):
+    erifile = tempfile.NamedTemporaryFile(dir=lib.param.TMPDIR)
+    general(mol, (mo_coeff,)*4, erifile.name, dataname='eri_mo',
+            intor=intor, motype=motype, aosym=aosym, comp=comp,
+            verbose=verbose)
+    with h5py.File(erifile.name, 'r') as feri:
+        return numpy.asarray(feri['eri_mo'])
+
+def general_iofree(mol, mo_coeffs, dataname='eri_mo', intor='int2e_sph',
+                   motype='ghf', aosym='s1', comp=None, verbose=logger.debug,
+                   **kwargs):
+    erifile = tempfile.NamedTemporaryFile(dir=lib.param.TMPDIR)
+    general(mol, mo_coeffs, erifile.name, dataname='eri_mo',
+            intor=intor, motype=motype, aosym=aosym, comp=comp,
+            verbose=verbose)
+    with h5py.File(erifile.name, 'r') as feri:
+        return numpy.asarray(feri['eri_mo'])
 
 # swapfile will be overwritten if exists.
 # mo_coeffs contains two sets of mos, one is alpha back transformed, one is beta back transformed.

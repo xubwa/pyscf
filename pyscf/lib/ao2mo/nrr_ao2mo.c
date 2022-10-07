@@ -163,7 +163,7 @@ void AO2MOfill_nrr_s1(int (*intor)(), int (*fprescreen)(),
                                          envs->bas, envs->nbas, envs->env,
                                          envs->cintopt, NULL);
                         } else {
-                                memset(pbuf, 0, sizeof(double)*n);
+                                NPdset0(pbuf, n);
                         }
                         pbuf += n;
                 }
