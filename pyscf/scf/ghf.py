@@ -529,7 +529,8 @@ class GHF(hf.SCF):
         return ghf_stability(self, verbose, return_status)
 
     def nuc_grad_method(self):
-        raise NotImplementedError
+        from pyscf.grad import ghf
+        return ghf.Gradients(self)
 
     def x2c1e(self):
         '''X2C with spin-orbit coupling effects.

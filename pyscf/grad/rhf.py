@@ -155,6 +155,14 @@ def get_jk(mol, dm):
     vhfopt = _vhf.VHFOpt(mol, 'int2e_ip1ip2', 'CVHFgrad_jk_prescreen',
                          'CVHFgrad_jk_direct_scf')
     dm = numpy.asarray(dm, order='C')
+    dm_dtype = dm.dtype
+    dm_shape = dm.shape
+    nao = dm_shape[-1]
+    print(dm.shape)
+    if dm.dtype == numpy.complex128:
+        dm = numpy.vstack((dm.real, dm.imag)).reshape(-1,nao,nao)
+        #hermi = 0
+    print(dm.shape)
     if dm.ndim == 3:
         n_dm = dm.shape[0]
     else:
@@ -179,6 +187,16 @@ def get_jk(mol, dm):
                                ('lk->s1ij', 'jk->s1il'),
                                dm, 3, # xyz, 3 components
                                mol._atm, mol._bas, mol._env, vhfopt=vhfopt)
+
+    if dm_dtype == numpy.complex128:
+        n_dm = vj.shape[0] // 2
+        vj_comp = numpy.empty((n_dm,3,nao,nao), dtype=numpy.complex128)
+        vk_comp = numpy.empty((n_dm,3,nao,nao), dtype=numpy.complex128)
+        for i in range(n_dm):
+            vj_comp[i] = vj[i] + vj[i+n_dm] * 1.j
+            vk_comp[i] = vk[i] + vk[i+n_dm] * 1.j
+        vj, vk = vj_comp, vk_comp
+
     return -vj, -vk
 
 def get_veff(mf_grad, mol, dm):
