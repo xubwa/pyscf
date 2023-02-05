@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2023 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Author: Xubo Wang <wangxubo0201@outlook.com>
+#
 
 '''
-Analytical nuclear gradients for 1-electron spin-free x2c method
+Analytical nuclear gradients for X2C1E method
 
 Ref.
 JCP 135, 084114 (2011); DOI:10.1063/1.3624397
+Note 1: Though the title of this paper is sfx2c, but changing the
+W matrix to the spin dependent one will give the two-component gradient.
+Note 2: Due to the spin-orbit coupling from X2CAMF method is an atom only term,
+it will not contribute to the nuclear gradients, and can be used directly.
+Note 3: This implementation uses the j-adapted spinor basis, i.e. can be used for SpinorX2CHelper directly,
+for SpinOrbitX2CHelper, the function for class will translate the j-adapted spinor basis to the spin-orbital one.
 '''
 
 from functools import reduce
@@ -26,60 +35,107 @@ import scipy.linalg
 from pyscf import lib
 from pyscf import gto
 from pyscf.x2c import x2c
+from pyscf.x2c.sfx2c1e_grad import _get_r1
 
-def hcore_grad_generator(x2cobj, mol=None):
-    '''nuclear gradients of 1-component X2c hcore Hamiltonian  (spin-free part only)
+def hcore_grad_generator_spinor(x2cobj, mol=None):
+    '''nuclear gradients of 2-component X2C1E core Hamiltonian
     '''
     if mol is None: mol = x2cobj.mol
     xmol, contr_coeff = x2cobj.get_xmol(mol)
 
     if x2cobj.basis is not None:
-        s22 = xmol.intor_symmetric('int1e_ovlp')
-        s21 = gto.intor_cross('int1e_ovlp', xmol, mol)
+        s22 = xmol.intor_symmetric('int1e_ovlp_spinor')
+        s21 = gto.intor_cross('int1e_ovlp_spinor', xmol, mol)
         contr_coeff = lib.cho_solve(s22, s21)
 
-    get_h1_xmol = gen_sf_hfw(xmol, x2cobj.approx)
+    get_h1_xmol = gen_hfw(xmol, x2cobj.approx)
     def hcore_deriv(atm_id):
         h1 = get_h1_xmol(atm_id)
         if contr_coeff is not None:
             h1 = lib.einsum('pi,xpq,qj->xij', contr_coeff, h1, contr_coeff)
+
+        if isinstance(x2cobj, x2c.SpinOrbitX2CHelper):
+            ca, cb = mol.sph2spinor_coeff()
+            h1so = numpy.zeros((h1.shape))
+            nao = h1so.shape[-1] // 2
+            h1so[:,:nao,:nao] = lib.einsum('xpq,pi,qj->xij', h1, ca, ca.conj().T)
+            h1so[:,nao:,nao:] = lib.einsum('xpq,pi,qj->xij', h1, cb, cb.conj().T)
+            h1so[:,:nao,nao:] = lib.einsum('xpq,pi,qj->xij', h1, ca, cb.conj().T)
+            h1so[:,nao:,:nao] = lib.einsum('xpq,pi,qj->xij', h1, cb, ca.conj().T)
+            h1 = h1so
         return numpy.asarray(h1)
     return hcore_deriv
 
 
-def gen_sf_hfw(mol, approx='1E'):
+def hcore_grad_generator_spinorbital(x2cobj, mol=None):
+    '''nuclear gradients of 2-component X2C1E core Hamiltonian
+    '''
+    if mol is None: mol = x2cobj.mol
+    xmol, contr_coeff = x2cobj.get_xmol(mol)
+    print(contr_coeff.shape)
+
+    if x2cobj.basis is not None:
+        s22 = xmol.intor_symmetric('int1e_ovlp_spinor')
+        s21 = gto.intor_cross('int1e_ovlp_spinor', xmol, mol)
+        contr_coeff = lib.cho_solve(s22, s21)
+
+    get_h1_xmol = gen_hfw(xmol, x2cobj.approx)
+    def hcore_deriv(atm_id):
+        h1 = get_h1_xmol(atm_id)
+        if contr_coeff is not None:
+            contr_coeff_2c = x2c._block_diag(contr_coeff)
+            print(h1.shape, contr_coeff_2c.shape)
+
+            h1 = lib.einsum('pi,xpq,qj->xij', contr_coeff_2c, h1, contr_coeff_2c)
+
+        ca, cb = mol.sph2spinor_coeff()
+        ca = ca.T
+        cb = cb.T
+        print(ca.shape)
+        h1so = numpy.zeros((h1.shape), dtype=complex)
+        nao = h1so.shape[-1] // 2
+        h1so[:,:nao,:nao] = lib.einsum('xpq,pi,qj->xij', h1, ca, ca.conj())
+        h1so[:,nao:,nao:] = lib.einsum('xpq,pi,qj->xij', h1, cb, cb.conj())
+        h1so[:,:nao,nao:] = lib.einsum('xpq,pi,qj->xij', h1, ca, cb.conj())
+        h1so[:,nao:,:nao] = lib.einsum('xpq,pi,qj->xij', h1, cb, ca.conj())
+        h1 = h1so
+        return numpy.asarray(h1)
+    return hcore_deriv
+
+def gen_hfw(mol, approx='1E'):
     approx = approx.upper()
     c = lib.param.LIGHT_SPEED
 
     h0, s0 = _get_h0_s0(mol)
     e0, c0 = scipy.linalg.eigh(h0, s0)
 
-    aoslices = mol.aoslice_by_atom()
-    nao = mol.nao_nr()
+    aoslices = mol.aoslice_2c_by_atom()
+    nao = mol.nao_2c()
+
     if 'ATOM' in approx:
         x0 = numpy.zeros((nao,nao))
         for ia in range(mol.natm):
             ish0, ish1, p0, p1 = aoslices[ia]
             shls_slice = (ish0, ish1, ish0, ish1)
-            t1 = mol.intor('int1e_kin', shls_slice=shls_slice)
-            s1 = mol.intor('int1e_ovlp', shls_slice=shls_slice)
+            t1 = mol.intor('int1e_kin_spinor', shls_slice=shls_slice)
+            s1 = mol.intor('int1e_ovlp_spinor', shls_slice=shls_slice)
             with mol.with_rinv_at_nucleus(ia):
                 z = -mol.atom_charge(ia)
-                v1 = z * mol.intor('int1e_rinv', shls_slice=shls_slice)
-                w1 = z * mol.intor('int1e_prinvp', shls_slice=shls_slice)
+                v1 = z * mol.intor('int1e_rinv_spinor', shls_slice=shls_slice)
+                w1 = z * mol.intor('int1e_sprinvsp_spinor', shls_slice=shls_slice)
             x0[p0:p1,p0:p1] = x2c._x2c1e_xmatrix(t1, v1, w1, s1, c)
     else:
-        cl0 = c0[:nao,nao:]
-        cs0 = c0[nao:,nao:]
+        cl0 = c0[:nao, nao:]
+        cs0 = c0[nao:, nao:]
         x0 = scipy.linalg.solve(cl0.T, cs0.T).T
 
-    s_nesc0 = s0[:nao,:nao] + reduce(numpy.dot, (x0.T, s0[nao:,nao:], x0))
-    R0 = x2c._get_r(s0[:nao,:nao], s_nesc0)
+    s_nesc0 = s0[:nao, :nao] + reduce(numpy.dot, (x0.T, s0[nao:, nao:], x0))
+    R0 = x2c._get_r(s0[:nao, :nao], s_nesc0)
     c_fw0 = numpy.vstack((R0, numpy.dot(x0, R0)))
     h0_fw_half = numpy.dot(h0, c_fw0)
 
-    ovlp = mol.intor('int1e_ovlp')
-    kin = mol.intor('int1e_kin')
+    ovlp = mol.intor('int1e_ovlp_spinor')
+    kin = mol.intor('int1e_kin_spinor')
     get_h1_etc = _gen_first_order_quantities(mol, e0, c0, x0, ovlp, kin, approx)
 
     def hcore_deriv(ia):
@@ -92,14 +148,15 @@ def gen_sf_hfw(mol, approx='1E'):
 
 def _get_h0_s0(mol):
     c = lib.param.LIGHT_SPEED
-    s = mol.intor_symmetric('int1e_ovlp')
-    t = mol.intor_symmetric('int1e_kin')
-    v = mol.intor_symmetric('int1e_nuc')
-    w = mol.intor_symmetric('int1e_pnucp')
+    s = mol.intor_symmetric('int1e_ovlp_spinor')
+    t = mol.intor_symmetric('int1e_kin_spinor')
+    v = mol.intor_symmetric('int1e_nuc_spinor')
+    w = mol.intor_symmetric('int1e_spnucsp_spinor')
     nao = s.shape[0]
     n2 = nao * 2
-    h = numpy.zeros((n2,n2), dtype=v.dtype)
-    m = numpy.zeros((n2,n2), dtype=v.dtype)
+    dtype = numpy.result_type(t, v, w, s)
+    h = numpy.zeros((n2,n2), dtype=dtype)
+    m = numpy.zeros((n2,n2), dtype=dtype)
     h[:nao,:nao] = v
     h[:nao,nao:] = t
     h[nao:,:nao] = t
@@ -110,34 +167,34 @@ def _get_h0_s0(mol):
 
 def _gen_h1_s1(mol):
     c = lib.param.LIGHT_SPEED
-    s1 = mol.intor('int1e_ipovlp', comp=3)
-    t1 = mol.intor('int1e_ipkin', comp=3)
-    v1 = mol.intor('int1e_ipnuc', comp=3)
-    w1 = mol.intor('int1e_ippnucp', comp=3)
+    s1 = mol.intor('int1e_ipovlp_spinor', comp=3)
+    t1 = mol.intor('int1e_ipkin_spinor', comp=3)
+    v1 = mol.intor('int1e_ipnuc_spinor', comp=3)
+    w1 = mol.intor('int1e_ipspnucsp_spinor', comp=3)
 
-    aoslices = mol.aoslice_by_atom()
+    aoslices = mol.aoslice_2c_by_atom()
     nao = s1.shape[1]
     n2 = nao * 2
+
     def get_h1_s1(ia):
         h1 = numpy.zeros((3,n2,n2), dtype=v1.dtype)
         m1 = numpy.zeros((3,n2,n2), dtype=v1.dtype)
         ish0, ish1, i0, i1 = aoslices[ia]
         with mol.with_rinv_origin(mol.atom_coord(ia)):
             z = mol.atom_charge(ia)
-            rinv1   = -z*mol.intor('int1e_iprinv', comp=3)
-            prinvp1 = -z*mol.intor('int1e_ipprinvp', comp=3)
-        rinv1  [:,i0:i1,:] -= v1[:,i0:i1]
-        prinvp1[:,i0:i1,:] -= w1[:,i0:i1]
+            rinv1 = -z*mol.intor('int1e_iprinv_spinor', comp=3)
+            sprinvsp1 = -z*mol.intor('int1e_ipsprinvsp_spinor', comp=3)
+            rinv1 [:, i0:i1, :] -= v1[:, i0:i1]
+            sprinvsp1[:, i0:i1, :] -= w1[:, i0:i1]
 
         for i in range(3):
-            s1cc = numpy.zeros((nao,nao))
-            t1cc = numpy.zeros((nao,nao))
-            s1cc[i0:i1,:] =-s1[i,i0:i1]
+            s1cc = numpy.zeros((nao, nao), dtype=complex)
+            t1cc = numpy.zeros((nao, nao), dtype=complex)
             s1cc[:,i0:i1]-= s1[i,i0:i1].T
             t1cc[i0:i1,:] =-t1[i,i0:i1]
             t1cc[:,i0:i1]-= t1[i,i0:i1].T
             v1cc = rinv1[i]   + rinv1[i].T
-            w1cc = prinvp1[i] + prinvp1[i].T
+            w1cc = sprinvsp1[i] + sprinvsp1[i].T
 
             h1[i,:nao,:nao] = v1cc
             h1[i,:nao,nao:] = t1cc
@@ -151,6 +208,7 @@ def _gen_h1_s1(mol):
 def _gen_first_order_quantities(mol, e0, c0, x0, s0, t0, approx='1E'):
     c = lib.param.LIGHT_SPEED
     nao = e0.size // 2
+    print(nao)
     n2 = nao * 2
 
     epq = e0[:,None] - e0
@@ -170,6 +228,8 @@ def _gen_first_order_quantities(mol, e0, c0, x0, s0, t0, approx='1E'):
     R0_mid = numpy.einsum('i,ij,j->ij', 1./w_sqrt, s_nesc0_vbas, 1./w_sqrt)
     wr0, vr0 = scipy.linalg.eigh(R0_mid)
     wr0_sqrt = numpy.sqrt(wr0)
+    print(wr0)
+    exit()
     # R0 in v_s basis
     R0 = numpy.dot(vr0/wr0_sqrt, vr0.T)
     R0 *= w_sqrt
@@ -205,8 +265,8 @@ def _gen_first_order_quantities(mol, e0, c0, x0, s0, t0, approx='1E'):
             s_nesc1+= lib.einsum('pi,xpq,qj->xij', x0, s1ao[:,nao:,nao:], x0)
             s_nesc1+= s1ao[:,:nao,:nao]
 
-        R1 = numpy.empty((3,nao,nao))
-        c_fw1 = numpy.empty((3,n2,nao))
+        R1 = numpy.empty((3,nao,nao), dtype=complex)
+        c_fw1 = numpy.empty((3,n2,nao), dtype=complex)
         for i in range(3):
             R1[i] = _get_r1((w_sqrt,v_s), s_nesc0_vbas,
                             s1ao[i,:nao,:nao], s_nesc1[i], (wr0_sqrt,vr0))
@@ -216,81 +276,3 @@ def _gen_first_order_quantities(mol, e0, c0, x0, s0, t0, approx='1E'):
                 c_fw1[i,nao:] += numpy.dot(x1[i], R0)
         return h1ao, s1ao, e1, c1_ao, x1, s_nesc1, R1, c_fw1
     return get_first_order
-
-def _get_r1(s0_roots, s_nesc0, s1, s_nesc1, r0_roots):
-    # See JCP 135, 084114 (2011); DOI:10.1063/1.3624397, Eq (34)
-    w_sqrt, v_s = s0_roots
-    w_invsqrt = 1. / w_sqrt
-    wr0_sqrt, vr0 = r0_roots
-    wr0_invsqrt = 1. / wr0_sqrt
-
-    s1 = reduce(numpy.dot, (v_s.T, s1, v_s))
-    s_nesc1 = reduce(numpy.dot, (v_s.T, s_nesc1, v_s))
-
-    s1_sqrt = s1 / (w_sqrt[:,None] + w_sqrt)
-    s1_invsqrt = (numpy.einsum('i,ij,j->ij', w_invsqrt**2, s1, w_invsqrt**2)
-                  / -(w_invsqrt[:,None] + w_invsqrt))
-    R1_mid = numpy.dot(s1_invsqrt, s_nesc0) * w_invsqrt
-    R1_mid = R1_mid + R1_mid.T
-    R1_mid += numpy.einsum('i,ij,j->ij', w_invsqrt, s_nesc1, w_invsqrt)
-
-    R1_mid = reduce(numpy.dot, (vr0.T, R1_mid, vr0))
-    R1_mid /= -(wr0_invsqrt[:,None] + wr0_invsqrt)
-    R1_mid = numpy.einsum('i,ij,j->ij', wr0_invsqrt**2, R1_mid, wr0_invsqrt**2)
-    vr0_wr0_sqrt = vr0 * wr0_invsqrt
-    vr0_s0_sqrt = vr0.T * w_sqrt
-    vr0_s0_invsqrt = vr0.T * w_invsqrt
-
-    R1  = reduce(numpy.dot, (vr0_s0_invsqrt.T, R1_mid, vr0_s0_sqrt))
-    R1 += reduce(numpy.dot, (s1_invsqrt, vr0_wr0_sqrt, vr0_s0_sqrt))
-    R1 += reduce(numpy.dot, (vr0_s0_invsqrt.T, vr0_wr0_sqrt.T, s1_sqrt))
-    R1 = reduce(numpy.dot, (v_s, R1, v_s.T))
-    return R1
-
-
-if __name__ == '__main__':
-    bak = lib.param.LIGHT_SPEED
-    lib.param.LIGHT_SPEED = 10
-    def get_h(mol):
-        c = lib.param.LIGHT_SPEED
-        t = mol.intor_symmetric('int1e_kin')
-        v = mol.intor_symmetric('int1e_nuc')
-        s = mol.intor_symmetric('int1e_ovlp')
-        w = mol.intor_symmetric('int1e_pnucp')
-        return x2c._x2c1e_get_hcore(t, v, w, s, c)
-
-    mol = gto.M(
-        verbose = 0,
-        atom = [["O" , (0. , 0.     , 0.0001)],
-                [1   , (0. , -0.757 , 0.587)],
-                [1   , (0. , 0.757  , 0.587)]],
-        basis = '3-21g',
-    )
-    h_1 = get_h(mol)
-
-    mol = gto.M(
-        verbose = 0,
-        atom = [["O" , (0. , 0.     ,-0.0001)],
-                [1   , (0. , -0.757 , 0.587)],
-                [1   , (0. , 0.757  , 0.587)]],
-        basis = '3-21g',
-    )
-    h_2 = get_h(mol)
-    h_ref = (h_1 - h_2) / 0.0002 * lib.param.BOHR
-
-    mol = gto.M(
-        verbose = 0,
-        atom = [["O" , (0. , 0.     , 0.   )],
-                [1   , (0. , -0.757 , 0.587)],
-                [1   , (0. , 0.757  , 0.587)]],
-        basis = '3-21g',
-    )
-    hcore_deriv = gen_sf_hfw(mol)
-    h1 = hcore_deriv(0)
-    print(abs(h1[2]-h_ref).max())
-    lib.param.LIGHT_SPEED = bak
-
-    print(lib.finger(h1) - -1.4618392662849411)
-    hcore_deriv = gen_sf_hfw(mol, approx='atom1e')
-    h1 = hcore_deriv(0)
-    print(lib.finger(h1) - -1.3596826558976405)

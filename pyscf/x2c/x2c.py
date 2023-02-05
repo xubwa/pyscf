@@ -275,6 +275,14 @@ class SpinorX2CHelper(X2CHelperMixin):
     the j-adapted spinor basis.
     '''
     pass
+    def hcore_deriv_generator(self, mol=None, deriv=1):
+        from pyscf.x2c import x2c1e_grad
+        if deriv == 1:
+            return x2c1e_grad.hcore_generator_spinor(self, mol)
+        elif deriv == 2:
+            raise NotImplementedError
+        else:
+            raise NotImplementedError
 
 X2C = SpinorX2CHelper
 
@@ -397,6 +405,15 @@ class SpinOrbitalX2CHelper(X2CHelperMixin):
         t = _block_diag(xmol.intor_symmetric('int1e_kin'))
         s1 = s + reduce(numpy.dot, (x.conj().T, t, x)) * (.5/c**2)
         return _get_r(s, s1)
+
+    def hcore_deriv_generator(self, mol=None, deriv=1):
+        from pyscf.x2c import x2c1e_grad
+        if deriv == 1:
+            return x2c1e_grad.hcore_grad_generator_spinorbital(self, mol)
+        elif deriv == 2:
+            raise NotImplementedError
+        else:
+            raise NotImplementedError
 
 
 def get_hcore(mol):

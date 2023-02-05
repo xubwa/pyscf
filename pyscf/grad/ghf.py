@@ -64,8 +64,11 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
         h1ao = hcore_deriv(ia)
         if dm0.dtype is numpy.complex128:
             h1ao = h1ao * (1+0.j)
+        if h1ao.shape[-1] != dm0.shape[-1]:
+            h1ao = numpy.asarray([scipy.linalg.block_diag(h1ao[i],h1ao[i]) for i in range(3)])
 
-        de[k] += numpy.einsum('xij,ij->x', h1ao, dm0[:nao,:nao]+dm0[nao:,nao:])
+        #de[k] += numpy.einsum('xij,ij->x', h1ao, dm0[:nao,:nao]+dm0[nao:,nao:])
+        #de[k] += numpy.einsum('xij,ij->x', h1ao, dm0)
 # s1, vhf are \nabla <i|h|j>, the nuclear gradients = -\nabla
         de[k] += numpy.einsum('xij,ij->x', vhf[:,p0:p1], dm0[p0:p1]) * 2
         de[k] += numpy.einsum('xij,ij->x', vhf[:,p0+nao:p1+nao], dm0[p0+nao:p1+nao]) * 2
