@@ -57,25 +57,29 @@ def grad_elec(mf_grad, mo_energy=None, mo_coeff=None, mo_occ=None, atmlst=None):
     if atmlst is None:
         atmlst = range(mol.natm)
     aoslices = mol.aoslice_by_atom()
-    de = numpy.zeros((len(atmlst),3), dm0.dtype)
+    de = numpy.zeros((len(atmlst),3), dtype=complex)
     nao = mol.nao_nr()
     for k, ia in enumerate(atmlst):
         shl0, shl1, p0, p1 = aoslices[ia]
         h1ao = hcore_deriv(ia)
+        if dm0.dtype is not numpy.complex128:
+            new_dm0 = numpy.zeros(dm0.shape, dtype=numpy.complex128)
+            new_dm0 += dm0
+            dm0 = new_dm0
         if dm0.dtype is numpy.complex128:
             h1ao = h1ao * (1+0.j)
+
         if h1ao.shape[-1] != dm0.shape[-1]:
             h1ao = numpy.asarray([scipy.linalg.block_diag(h1ao[i],h1ao[i]) for i in range(3)])
 
-        #de[k] += numpy.einsum('xij,ij->x', h1ao, dm0[:nao,:nao]+dm0[nao:,nao:])
-        #de[k] += numpy.einsum('xij,ij->x', h1ao, dm0)
+        de[k] += numpy.einsum('xij,ij->x', h1ao, dm0)
 # s1, vhf are \nabla <i|h|j>, the nuclear gradients = -\nabla
         de[k] += numpy.einsum('xij,ij->x', vhf[:,p0:p1], dm0[p0:p1]) * 2
         de[k] += numpy.einsum('xij,ij->x', vhf[:,p0+nao:p1+nao], dm0[p0+nao:p1+nao]) * 2
         de[k] -= numpy.einsum('xij,ij->x', s1[:,p0:p1], dme0[p0:p1,:nao]) * 2
         de[k] -= numpy.einsum('xij,ij->x', s1[:,p0:p1], dme0[p0+nao:p1+nao,nao:]) * 2
 
-        de[k] += mf_grad.extra_force(ia, locals())
+        #de[k] += mf_grad.extra_force(ia, locals())
     if log.verbose >= logger.DEBUG:
         log.debug('gradients of electronic part')
         rhf_grad._write(log, mol, de, atmlst)
@@ -96,7 +100,6 @@ def get_veff(mf_grad, mol, dm):
     dms = numpy.stack((dmaa, dmbb, dmab, dmba))
 
     j1, k1 = mf_grad.get_jk(mol, dms)
-    print(j1.shape, k1.shape)
     j1[0].shape
     vj = numpy.zeros((3, nao*2, nao*2), dm.dtype)
     vk = numpy.zeros((3, nao*2, nao*2), dm.dtype)
