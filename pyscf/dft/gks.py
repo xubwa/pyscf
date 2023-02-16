@@ -167,7 +167,8 @@ class GKS(rks.KohnShamDFT, ghf.GHF):
         self._numint.spin_samples = val
 
     def nuc_grad_method(self):
-        raise NotImplementedError
+        from pyscf.grad import gks as gks_grad
+        return gks_grad.Gradients(self)
 
 
 if __name__ == '__main__':
