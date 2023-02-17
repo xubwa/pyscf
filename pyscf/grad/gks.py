@@ -77,7 +77,8 @@ def get_veff(ks_grad, mol=None, dm=None):
         #                                  verbose=ks_grad.verbose)
         #    vxc += vnlc
     t0 = logger.timer(ks_grad, 'vxc', *t0)
-
+    if dm.dtype == complex:
+        vxc = vxc * (1+0.j)
     nao = mol.nao_nr()
     dmaa = dm[:nao, :nao]
     dmbb = dm[nao:, nao:]
@@ -93,7 +94,7 @@ def get_veff(ks_grad, mol=None, dm=None):
 
     else:
         dms = numpy.stack((dmaa, dmbb, dmab, dmba))
-        j1, k1 = ks_grad.get_jk(mol, dm)
+        j1, k1 = ks_grad.get_jk(mol, dms)
         vj = numpy.zeros((3, nao*2, nao*2), dm.dtype)
         vk = numpy.zeros((3, nao*2, nao*2), dm.dtype)
         vj[:, :nao, :nao] = j1[0] + j1[1]
