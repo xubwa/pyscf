@@ -31,6 +31,20 @@ from pyscf import __config__
 
 LINEAR_DEP_THRESHOLD = 1e-9
 
+def spinor2sph(mol, spinor):
+    assert (spinor.shape[0] == mol.nao_2c()), "spinor integral must be of shape (nao_2c, nao_2c)"
+    c = mol.sph2spinor_coeff()
+    c2 = numpy.vstack(c)
+    ints_sph = lib.einsum('ip,pq,qj->ij', c2, spinor, c2.T.conj())
+    return ints_sph
+
+def sph2spinor(mol, sph):
+    assert (sph.shape[0] == mol.nao_nr() * 2), "spherical integral must be of shape (nao_nr, nao_nr)"
+    c = mol.sph2spinor_coeff()
+    c2 = numpy.vstack(c)
+    ints_spinor = lib.einsum('ip,pq,qj->ij', c2.T.conj(), sph, c2)
+    return ints_spinor
+
 class X2CHelperMixin(lib.StreamObject):
     '''2-component X2c (including spin-free and spin-dependent terms) in
     the j-adapted spinor basis.
@@ -426,6 +440,19 @@ def get_jk(mol, dm, hermi=1, mf_opt=None, with_j=True, with_k=True, omega=None):
     '''non-relativistic J/K matrices (without SSO,SOO etc) in the j-adapted
     spinor basis.
     '''
+    def jkbuild(mol, dm, hermi, with_j, with_k, omega=None):
+        if (not omega and
+            (self._eri is not None or mol.incore_anyway or self._is_mem_enough())):
+            if self._eri is None:
+                self._eri = mol.intor('int2e', aosym='s8')
+            return hf.dot_eri_dm(self._eri, dm, hermi, with_j, with_k)
+        else:
+            return hf.SCF.get_jk(self, mol, dm, hermi, with_j, with_k, omega)
+    dm_sph = spinor2sph(mol, dm)
+    j_sph, k_sph = ghf.get_jk(mol, dm_sph, hermi=1, jkbuild=jkbuild)
+    j_spinor = sph2spinor(mol, j_sph)
+    k_spinor = sph2spinor(mol, k_sph)
+    return j_spinor, k_spinor
     vj, vk = _vhf.rdirect_mapdm('int2e_spinor', 's8',
                                 ('ji->s2kl', 'jk->s1il'), dm, 1,
                                 mol._atm, mol._bas, mol._env, mf_opt)
@@ -548,6 +575,10 @@ class SCF(hf.SCF):
                           'CVHFrkbllll_direct_scf',
                           'CVHFrkbllll_direct_scf_dm')
         opt.direct_scf_tol = self.direct_scf_tol
+        opt = _vhf.VHFOpt(mol, 'int2e', 'CVHFnrs8_prescreen',
+                          'CVHFsetnr_direct_scf',
+                          'CVHFsetnr_direct_scf_dm')
+        opt.direct_scf_tol = self.direct_scf_tol
         set_vkscreen(opt, 'CVHFrkbllll_vkscreen')
         return opt
 
@@ -558,9 +589,12 @@ class SCF(hf.SCF):
         t0 = (logger.process_clock(), logger.perf_counter())
         if self.direct_scf and self.opt is None:
             self.opt = self.init_direct_scf(mol)
-        vj, vk = get_jk(mol, dm, hermi, self.opt, with_j, with_k)
+        dm_sph = spinor2sph(mol, dm)
+        j_sph, k_sph = ghf.GHF.get_jk(self, mol, dm_sph)
+        j_spinor = sph2spinor(mol, j_sph)
+        k_spinor = sph2spinor(mol, k_sph)
         logger.timer(self, 'vj and vk', *t0)
-        return vj, vk
+        return j_spinor, k_spinor
 
     def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
         '''Dirac-Coulomb'''
